@@ -1,0 +1,261 @@
+from django.db import models
+from django.conf import settings
+
+class Recipe(models.Model):
+    product = models.ForeignKey('warehouse_v2.Material', on_delete=models.CASCADE, related_name='recipes', null=True)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    density = models.FloatField(default=0, help_text="Target density for this recipe (kg/m3)")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} for {self.product.name if self.product else '?'}"
+
+class RecipeItem(models.Model):
+    recipe = models.ForeignKey(Recipe, on_delete=models.CASCADE, related_name='items')
+    material = models.ForeignKey('warehouse_v2.Material', on_delete=models.CASCADE)
+    quantity = models.FloatField(help_text="Standard quantity for this recipe")
+
+    def __str__(self):
+        return f"{self.recipe.name}: {self.material.name} x {self.quantity}"
+
+class Zames(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Kutilmoqda'),
+        ('IN_PROGRESS', 'Jarayonda'),
+        ('DONE', 'Tugallandi'),
+        ('CANCELLED', 'Bekor qilindi'),
+    )
+
+    zames_number = models.CharField(max_length=50, unique=True)
+    recipe = models.ForeignKey(Recipe, on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    
+    start_time = models.DateTimeField(null=True, blank=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    
+    input_weight = models.FloatField(default=0)
+    output_weight = models.FloatField(default=0)
+    expanded_weight = models.FloatField(default=0, help_text="Weight after primary expansion") # legacy field placeholder
+    dried_weight = models.FloatField(default=0) # legacy field placeholder
+    
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    machine_id = models.CharField(max_length=50, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Zames {self.zames_number} ({self.status})"
+
+class ZamesItem(models.Model):
+    zames = models.ForeignKey(Zames, on_delete=models.CASCADE, related_name='items')
+    material = models.ForeignKey('warehouse_v2.Material', on_delete=models.CASCADE)
+    batch = models.ForeignKey('warehouse_v2.RawMaterialBatch', on_delete=models.SET_NULL, null=True, blank=True)
+    quantity = models.FloatField()
+
+    def __str__(self):
+        return f"{self.zames}: {self.material.name} ({self.quantity})"
+
+class Bunker(models.Model):
+    name = models.CharField(max_length=50) # Bunker 1, 2, 3, 4
+    is_occupied = models.BooleanField(default=False)
+    last_occupied_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.name} ({'Occupied' if self.is_occupied else 'Free'})"
+
+class BunkerLoad(models.Model):
+    zames = models.ForeignKey(Zames, on_delete=models.CASCADE, related_name='loads')
+    bunker = models.ForeignKey(Bunker, on_delete=models.CASCADE, related_name='loads')
+    load_time = models.DateTimeField(auto_now_add=True)
+    required_time = models.IntegerField(help_text="Time required for rest in minutes")
+
+    def __str__(self):
+        return f"Bunker Load for {self.zames} in {self.bunker}"
+
+class BlockProduction(models.Model):
+    STATUS_CHOICES = (
+        ('DRYING', 'Quritilmoqda'),
+        ('READY', 'Tayyor'),
+        ('DEFECT', 'Brak'),
+        ('RESERVED', 'Band qilingan'),
+        ('SOLD', 'Sotilgan'),
+    )
+
+    zames = models.ForeignKey(Zames, on_delete=models.CASCADE, related_name='blocks')
+    form_number = models.CharField(max_length=50)
+    block_count = models.IntegerField()
+    
+    # Physical Parameters
+    length = models.FloatField(default=1000, help_text="mm")
+    width = models.FloatField(default=500, help_text="mm")
+    height = models.FloatField(default=500, help_text="mm")
+    density = models.FloatField(default=20, help_text="kg/m3")
+    
+    volume = models.FloatField(default=0, help_text="Total volume in m3")
+    weight_per_block = models.FloatField(default=0, help_text="kg")
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRYING')
+    warehouse = models.ForeignKey('warehouse_v2.Warehouse', on_delete=models.SET_NULL, null=True, blank=True)
+    
+    date = models.DateField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # Auto-calculate volume if not set: (L * W * H / 10^9) * count
+        if not self.volume:
+            self.volume = (self.length * self.width * self.height / 1e9) * self.block_count
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Batch {self.id} | {self.block_count} blocks | {self.density} kg/m3"
+
+class DryingProcess(models.Model):
+    block_production = models.ForeignKey(BlockProduction, on_delete=models.CASCADE, related_name='drying_processes')
+    start_time = models.DateTimeField(auto_now_add=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Drying for {self.block_production}"
+class ProductionOrder(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Kutilmoqda'),
+        ('PLANNED', 'Rejalashtirilgan'),
+        ('IN_PROGRESS', 'Jarayonda'),
+        ('QC_PENDING', 'Sifat Nazorati'),
+        ('REPAIR', 'Brak / Qayta ishlov'),
+        ('DELAYED', 'Kechikayotgan'),
+        ('COMPLETED', 'Tugallangan'),
+        ('CANCELLED', 'Bekor qilingan'),
+    )
+
+    order_number = models.CharField(max_length=50, unique=True)
+    product = models.ForeignKey('warehouse_v2.Material', on_delete=models.SET_NULL, null=True)
+    quantity = models.IntegerField(help_text="Volume in blocks or cubic meters")
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    progress = models.FloatField(default=0, help_text="Total completion percentage")
+    priority = models.CharField(max_length=20, choices=(
+        ('URGENT', 'Shoshilinch'),
+        ('HIGH', 'Yuqori'),
+        ('MEDIUM', 'O‘rtacha'),
+        ('LOW', 'Past'),
+    ), default='MEDIUM')
+    
+    start_date = models.DateTimeField(null=True, blank=True)
+    deadline = models.DateTimeField(null=True, blank=True)
+    
+    responsible = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='responsible_orders')
+    source_order = models.CharField(max_length=100, blank=True, help_text="Link to MTO order or 'STOCK'")
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Order {self.order_number} ({self.status})"
+
+class ProductionOrderStage(models.Model):
+    STAGE_TYPES = (
+        ('ZAMES', 'Zames (Mixing)'),
+        ('DRYING', 'Quritish'),
+        ('BUNKER', 'Bunker (Resting)'),
+        ('FORMOVKA', 'Formovka (Molding)'),
+        ('BLOK', 'Blok (Cutting/Sizing)'),
+        ('CNC', 'CNC (Cutting)'),
+        ('DEKOR', 'Dekor (Finishing)'),
+    )
+    
+    STATUS_CHOICES = (
+        ('PENDING', 'Kutilmoqda'),
+        ('ACTIVE', 'Aktiv'),
+        ('DONE', 'Tugallangan'),
+        ('PAUSED', 'To‘xtatilgan'),
+        ('FAILED', 'Xatolik / To‘xtagan'),
+    )
+
+    order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='stages')
+    stage_type = models.CharField(max_length=20, choices=STAGE_TYPES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    
+    sequence = models.IntegerField(default=0, help_text="Order of this stage in the pipeline")
+    
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    responsible = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='assigned_stages')
+    current_operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='active_worker_stages')
+    
+    # Execution metrics
+    actual_quantity = models.FloatField(default=0)
+    waste_amount = models.FloatField(default=0)
+    
+    # Optional link to concrete entity if applicable (e.g. Zames instance)
+    related_id = models.IntegerField(null=True, blank=True, help_text="ID of the related entity like Zames object")
+
+    def __str__(self):
+        return f"{self.order.order_number} - {self.get_stage_type_display()} ({self.status})"
+
+class ProductionPlan(models.Model):
+    STATUS_CHOICES = (
+        ('DRAFT', 'Qoralama'),
+        ('ACTIVE', 'Aktiv'),
+        ('COMPLETED', 'Tugallandi'),
+    )
+    date = models.DateField()
+    shift = models.CharField(max_length=20, choices=(('DAY', 'Kunlik'), ('NIGHT', 'Tungi')), default='DAY')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    
+    orders = models.ManyToManyField(ProductionOrder, related_name='plans')
+    target_volume = models.FloatField(default=0)
+    actual_volume = models.FloatField(default=0)
+    
+    start_time = models.DateTimeField(null=True, blank=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Plan for {self.date} ({self.shift})"
+
+class QualityCheck(models.Model):
+    STATUS_CHOICES = (
+        ('PASSED', 'Tasdiqlandi'),
+        ('FAILED', 'Rad etildi (Brak)'),
+        ('PENDING', 'Kutilmoqda'),
+    )
+    
+    order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='quality_checks')
+    stage = models.ForeignKey(ProductionOrderStage, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    notes = models.TextField(blank=True)
+    waste_weight = models.FloatField(default=0, help_text="kg")
+    
+    inspector = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"QC for {self.order.order_number}: {self.status}"
+
+class StageActionLog(models.Model):
+    ACTION_CHOICES = (
+        ('START', 'Boshlash'),
+        ('FINISH', 'Yakunlash'),
+        ('FAIL', 'Xatolik'),
+        ('PAUSE', 'To‘xtatish'),
+        ('RESUME', 'Davom ettirish'),
+        ('RESET', 'Qayta tiklash'),
+    )
+    
+    order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='stage_logs')
+    stage = models.ForeignKey(ProductionOrderStage, on_delete=models.CASCADE, related_name='action_logs')
+    stage_type = models.CharField(max_length=50) # Redundant for easier querying
+    
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"{self.order.order_number} - {self.stage_type} - {self.action} by {self.user}"

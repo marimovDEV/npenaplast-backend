@@ -1,0 +1,108 @@
+from django.contrib import admin
+from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
+from documents.views import DocumentViewSet
+from inventory.views import InventoryViewSet
+from rest_framework.routers import DefaultRouter
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from rest_framework_simplejwt.views import TokenRefreshView
+from accounts.views import UserViewSet, DepartmentViewSet, RoleViewSet, PermissionViewSet, TokenObtainPairView
+from accounts.compatibility import UserMeView
+from warehouse_v2.views import (
+    SupplierViewSet, MaterialViewSet, RawMaterialBatchViewSet,
+    WarehouseViewSet, StockViewSet, WarehouseTransferViewSet
+)
+from warehouse_v2.compatibility import (
+    InventoryCompatibilityView, ProductCompatibilityView, DocumentCompatibilityView
+)
+from production_v2.views import (
+    ZamesViewSet, BunkerViewSet, BunkerLoadViewSet,
+    BlockProductionViewSet, DryingProcessViewSet, RecipeViewSet,
+    ProductionOrderViewSet, ProductionPlanViewSet, QualityCheckViewSet
+)
+from production_v2.compatibility import ProductionTaskCompatibilityView
+from cnc_v2.views import CNCJobViewSet, WasteProcessingViewSet
+from sales_v2.views import CustomerViewSet, InvoiceViewSet, SaleItemViewSet, DeliveryViewSet
+from common_v2.views import AuditLogViewSet, NotificationViewSet
+from common_v2.compatibility import DashboardCompatibilityView
+from reports_v2.views import (
+    RawMaterialReportView, ProductionEfficiencyView,
+    WarehouseBalanceView, SalesReportView, GeneralAnalyticsView,
+    ReportHistoryViewSet
+)
+from transactions.views import TransactionViewSet
+from finishing_v2.views import FinishingJobViewSet
+from waste_v2.views import WasteTaskViewSet, WasteCategoryViewSet
+
+router = DefaultRouter()
+router.register(r'users', UserViewSet)
+router.register(r'departments', DepartmentViewSet)
+router.register(r'roles', RoleViewSet)
+router.register(r'permissions', PermissionViewSet)
+router.register(r'suppliers', SupplierViewSet)
+router.register(r'materials', MaterialViewSet)
+router.register(r'batches', RawMaterialBatchViewSet, basename='raw-material-batch')
+router.register(r'warehouses', WarehouseViewSet, basename='warehouse')
+router.register(r'stocks', StockViewSet, basename='stock')
+router.register(r'transfers', WarehouseTransferViewSet, basename='warehouse-transfer')
+router.register(r'production/zames', ZamesViewSet)
+router.register(r'production/recipes', RecipeViewSet)
+router.register(r'production/bunkers', BunkerViewSet)
+router.register(r'production/loads', BunkerLoadViewSet)
+router.register(r'production/blocks', BlockProductionViewSet)
+router.register(r'production/drying', DryingProcessViewSet)
+router.register(r'production/qc', QualityCheckViewSet, basename='production-qc')
+router.register(r'production/plans', ProductionPlanViewSet)
+router.register(r'production/orders', ProductionOrderViewSet)
+router.register(r'sales/invoices', InvoiceViewSet)
+router.register(r'sales/deliveries', DeliveryViewSet, basename='sales-delivery')
+router.register(r'cnc/jobs', CNCJobViewSet)
+router.register(r'cnc/waste', WasteProcessingViewSet)
+router.register(r'finishing/jobs', FinishingJobViewSet, basename='finishing')
+router.register(r'waste/tasks', WasteTaskViewSet)
+router.register(r'waste/categories', WasteCategoryViewSet)
+router.register(r'reports/history', ReportHistoryViewSet, basename='report-history')
+router.register(r'transactions', TransactionViewSet)
+router.register(r'inventory', InventoryViewSet)
+# Legacy/Compatibility aliases
+router.register(r'clients', CustomerViewSet, basename='client-compat')
+router.register(r'sales-orders', InvoiceViewSet, basename='sales-order-compat')
+router.register(r'audit-logs', AuditLogViewSet)
+router.register(r'notifications', NotificationViewSet, basename='notification')
+router.register(r'documents', DocumentViewSet)
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api/users/me/', UserMeView.as_view(), name='user-me'),
+    path('api/', include(router.urls)),
+    
+    # Compatibility Routes
+    path('api/dashboard/summary/', DashboardCompatibilityView.as_view(), name='dashboard-summary'),
+    # path('api/inventory/', InventoryCompatibilityView.as_view(), name='inventory-compat'), # Removed compatibility
+    path('api/products/', ProductCompatibilityView.as_view(), name='product-compat'),
+    # path('api/documents/', DocumentCompatibilityView.as_view(), name='document-compat'), # Removed compatibility
+    path('api/production-tasks/', ProductionTaskCompatibilityView.as_view(), name='production-tasks'),
+    path('api/production-tasks/<int:pk>/', ProductionTaskCompatibilityView.as_view(), name='production-tasks-detail'),
+    
+    # Reports
+    path('api/reports/analytics/', GeneralAnalyticsView.as_view(), name='report-analytics'),
+    path('api/reports/intake/', RawMaterialReportView.as_view(), name='report-intake'),
+    path('api/reports/efficiency/', ProductionEfficiencyView.as_view(), name='report-efficiency'),
+    path('api/reports/balances/', WarehouseBalanceView.as_view(), name='report-balances'),
+    path('api/reports/sales/', SalesReportView.as_view(), name='report-sales'),
+
+    # New Modules
+    path('api/finance/', include('finance_v2.urls')),
+    path('api/sales/', include('sales_v2.urls')),
+
+    # Auth
+    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    
+    # Documentation
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+]
+
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

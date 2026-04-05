@@ -1,0 +1,145 @@
+from rest_framework import serializers
+from .models import (
+    Zames, Bunker, BunkerLoad, BlockProduction, 
+    DryingProcess, Recipe, RecipeItem, ZamesItem,
+    ProductionOrder, ProductionOrderStage, ProductionPlan, QualityCheck
+)
+from warehouse_v2.serializers import MaterialSerializer
+
+class RecipeItemSerializer(serializers.ModelSerializer):
+    material_name = serializers.ReadOnlyField(source='material.name')
+    
+    class Meta:
+        model = RecipeItem
+        fields = '__all__'
+
+class RecipeSerializer(serializers.ModelSerializer):
+    items = RecipeItemSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Recipe
+        fields = '__all__'
+
+class ZamesItemSerializer(serializers.ModelSerializer):
+    material_name = serializers.ReadOnlyField(source='material.name')
+    
+    class Meta:
+        model = ZamesItem
+        fields = '__all__'
+
+class ZamesSerializer(serializers.ModelSerializer):
+    items = ZamesItemSerializer(many=True, required=False)
+    recipe_name = serializers.ReadOnlyField(source='recipe.name')
+    operator_name = serializers.ReadOnlyField(source='operator.username')
+    
+    class Meta:
+        model = Zames
+        fields = [
+            'id', 'zames_number', 'recipe', 'recipe_name', 'status', 
+            'start_time', 'end_time', 'input_weight', 'output_weight', 
+            'operator', 'operator_name', 'machine_id', 'created_at', 'items'
+        ]
+        read_only_fields = ('created_at',)
+
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', [])
+        zames = Zames.objects.create(**validated_data)
+        for item_data in items_data:
+            ZamesItem.objects.create(zames=zames, **item_data)
+        return zames
+
+class BunkerSerializer(serializers.ModelSerializer):
+    bunkerNumber = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    batchNumber = serializers.SerializerMethodField()
+    loadedAt = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Bunker
+        fields = ['id', 'name', 'bunkerNumber', 'status', 'batchNumber', 'loadedAt']
+
+    def get_bunkerNumber(self, obj):
+        # Extract number from name: "Bunker 1" -> "1"
+        import re
+        match = re.search(r'\d+', obj.name)
+        return match.group() if match else obj.name
+
+    def get_status(self, obj):
+        active_load = obj.loads.order_by('-load_time').first()
+        if not active_load:
+            return 'Empty'
+        
+        from django.utils import timezone
+        # If required time for aging has passed, it's 'Ready'
+        aging_end = active_load.load_time + timezone.timedelta(minutes=active_load.required_time)
+        if timezone.now() > aging_end:
+            return 'Ready'
+        return 'Aging'
+
+    def get_batchNumber(self, obj):
+        active_load = obj.loads.order_by('-load_time').first()
+        if active_load and active_load.zames:
+            return f"EXP-{active_load.zames.zames_number}"
+        return None
+
+    def get_loadedAt(self, obj):
+        active_load = obj.loads.order_by('-load_time').first()
+        return active_load.load_time if active_load else None
+
+class BunkerLoadSerializer(serializers.ModelSerializer):
+    zames_number = serializers.ReadOnlyField(source='zames.zames_number')
+    bunker_name = serializers.ReadOnlyField(source='bunker.name')
+
+    class Meta:
+        model = BunkerLoad
+        fields = '__all__'
+
+class BlockProductionSerializer(serializers.ModelSerializer):
+    zames_number = serializers.ReadOnlyField(source='zames.zames_number')
+
+    class Meta:
+        model = BlockProduction
+        fields = '__all__'
+
+class DryingProcessSerializer(serializers.ModelSerializer):
+    block_details = serializers.ReadOnlyField(source='block_production.__str__')
+
+    class Meta:
+        model = DryingProcess
+        fields = '__all__'
+class ProductionOrderStageSerializer(serializers.ModelSerializer):
+    stage_type_display = serializers.CharField(source='get_stage_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    current_operator_name = serializers.ReadOnlyField(source='current_operator.username')
+
+    class Meta:
+        model = ProductionOrderStage
+        fields = '__all__'
+
+class ProductionOrderSerializer(serializers.ModelSerializer):
+    product_name = serializers.ReadOnlyField(source='product.name')
+    stages = ProductionOrderStageSerializer(many=True, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    responsible_name = serializers.ReadOnlyField(source='responsible.username')
+
+    class Meta:
+        model = ProductionOrder
+        fields = '__all__'
+
+class ProductionPlanSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    shift_display = serializers.CharField(source='get_shift_display', read_only=True)
+    orders_detail = ProductionOrderSerializer(source='orders', many=True, read_only=True)
+
+    class Meta:
+        model = ProductionPlan
+        fields = '__all__'
+
+class QualityCheckSerializer(serializers.ModelSerializer):
+    inspector_name = serializers.ReadOnlyField(source='inspector.username')
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    order_number = serializers.ReadOnlyField(source='order.order_number')
+
+    class Meta:
+        model = QualityCheck
+        fields = '__all__'
