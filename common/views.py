@@ -7,7 +7,7 @@ from django.utils import timezone
 from datetime import timedelta
 from products.models import Product, ProductionTask
 from warehouse.models import Warehouse
-from inventory.models import Inventory
+from inventory.models import InventoryBatch
 from documents.models import Document, DocumentItem
 from sales.models import SalesOrder, Client
 from .models import AuditLog
@@ -23,23 +23,23 @@ class DashboardSummaryView(APIView):
 
     def get(self, request):
         # 1. Total Materials (Granula) from Sklad 1
-        mat_qty = Inventory.objects.filter(warehouse__name__icontains='Sklad 1').aggregate(total=Sum('quantity'))['total'] or 0
+        mat_qty = InventoryBatch.objects.filter(location__name__icontains='Sklad 1').aggregate(total=Sum('current_weight'))['total'] or 0
         
         # 2. Finished Blocks from Sklad 2
-        block_qty = Inventory.objects.filter(warehouse__name__icontains='Sklad 2').aggregate(total=Sum('quantity'))['total'] or 0
+        block_qty = InventoryBatch.objects.filter(location__name__icontains='Sklad 2').aggregate(total=Sum('current_weight'))['total'] or 0
         
         # 3. Finished Products from Sklad 4
-        product_qty = Inventory.objects.filter(warehouse__name__icontains='Sklad 4').aggregate(total=Sum('quantity'))['total'] or 0
+        product_qty = InventoryBatch.objects.filter(location__name__icontains='Sklad 4').aggregate(total=Sum('current_weight'))['total'] or 0
         
         # 4. Waste
-        waste_qty = Inventory.objects.filter(warehouse__type='Waste').aggregate(total=Sum('quantity'))['total'] or 0
+        waste_qty = InventoryBatch.objects.filter(location__type='Waste').aggregate(total=Sum('current_weight'))['total'] or 0
 
         # 6. Bunkers Status
         bunkers = Warehouse.objects.filter(type='Bunker').order_by('name')
         bunker_data = []
         for b in bunkers:
              # Basic logic: if has inventory > 0, it's not empty
-             inv = Inventory.objects.filter(warehouse=b).aggregate(total=Sum('quantity'))['total'] or 0
+             inv = InventoryBatch.objects.filter(location=b).aggregate(total=Sum('current_weight'))['total'] or 0
              status = 'Empty' if inv == 0 else 'In Use' # Simplified
              bunker_data.append({'id': b.id, 'name': b.name, 'status': status})
 
@@ -74,7 +74,7 @@ class DashboardSummaryView(APIView):
 
         # Waste Rate
         total_produced = ProductionTask.objects.filter(is_completed=True).aggregate(total=Sum('quantity'))['total'] or 1
-        total_waste = Inventory.objects.filter(warehouse__type='Waste').aggregate(total=Sum('quantity'))['total'] or 0
+        total_waste = InventoryBatch.objects.filter(location__type='Waste').aggregate(total=Sum('current_weight'))['total'] or 0
         waste_rate = (total_waste / (total_produced + total_waste)) * 100
 
         # 8. Salesperson specific metrics

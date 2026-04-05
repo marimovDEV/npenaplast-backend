@@ -1,26 +1,27 @@
 from django.db import transaction
 from django.utils import timezone
 from .models import Invoice, SaleItem, Customer
-from inventory.models import Inventory
+from inventory.models import InventoryBatch
 from warehouse_v2.models import Warehouse, Material
 from rest_framework.exceptions import ValidationError
 from finance_v2.models import FinancialTransaction, Cashbox, ClientBalance
+from finance.services import record_double_entry
 
 
 def _release_reserved_inventory(item):
     if not item.source_warehouse_id or not item.batch_number:
         return
 
-    inv = Inventory.objects.select_for_update().filter(
+    inv = InventoryBatch.objects.select_for_update().filter(
         product=item.product,
-        warehouse_id=item.source_warehouse_id,
+        location_id=item.source_warehouse_id,
         batch_number=item.batch_number,
     ).first()
     if not inv:
         return
 
-    inv.reserved_quantity = max(inv.reserved_quantity - item.quantity, 0)
-    inv.save(update_fields=['reserved_quantity'])
+    inv.reserved_weight = max(float(inv.reserved_weight) - float(item.quantity), 0)
+    inv.save(update_fields=['reserved_weight'])
 
 
 def _ensure_sales_document(invoice, warehouse, items, user=None):
@@ -128,20 +129,21 @@ def create_invoice(warehouse_id, customer_id, items, payment_method='CASH', deli
 
             # 1. Handle Reservation if batch is provided
             if batch:
-                inv, created = Inventory.objects.select_for_update().get_or_create(
+                inv, created = InventoryBatch.objects.select_for_update().get_or_create(
                     product=product,
-                    warehouse=warehouse,
-                    batch_number=batch
+                    location=warehouse,
+                    batch_number=batch,
+                    defaults={'initial_weight': 0, 'current_weight': 0}
                 )
                 
-                available = inv.quantity - inv.reserved_quantity
+                available = float(inv.current_weight) - float(inv.reserved_weight)
                 if available < qty:
                     raise ValidationError(
                         f"Yetersiz qoldiq: {product.name} ({batch}). "
-                        f"Mavjud: {inv.quantity}, Bandda: {inv.reserved_quantity}, So'ralgan: {qty}"
+                        f"Mavjud: {inv.current_weight}, Bandda: {inv.reserved_weight}, So'ralgan: {qty}"
                     )
                 
-                inv.reserved_quantity += qty
+                inv.reserved_weight = float(inv.reserved_weight) + qty
                 inv.save()
 
             # 2. Create Sale Item
@@ -284,6 +286,17 @@ def transition_invoice_status(invoice_id, new_status, performed_by=None):
                 cb, _ = ClientBalance.objects.get_or_create(customer=invoice.customer)
                 cb.total_debt += invoice.total_amount
                 cb.save()
+                
+                # Finance: Accounts Receivable (4010) -> Revenue (9010)
+                record_double_entry(
+                    description=f"Sotuv (Qarz) #{invoice.invoice_number}",
+                    entries=[
+                        {'account_code': '4010', 'debit': invoice.total_amount, 'credit': 0},
+                        {'account_code': '9010', 'debit': 0, 'credit': invoice.total_amount},
+                    ],
+                    reference=invoice.invoice_number,
+                    user=performed_by
+                )
             else:
                 cashbox_type = 'CASH' if invoice.payment_method == 'CASH' else ('BANK' if invoice.payment_method == 'BANK' else 'CARD')
                 cashbox = Cashbox.objects.filter(type=cashbox_type, is_active=True).first()
@@ -295,6 +308,18 @@ def transition_invoice_status(invoice_id, new_status, performed_by=None):
                         customer=invoice.customer,
                         description=f"Sotuv #{invoice.invoice_number} uchun to'lov",
                         performed_by=performed_by
+                    )
+                    
+                    # Finance: Cash/Bank (1010/1020) -> Revenue (9010)
+                    acc_code = '1010' if cashbox_type == 'CASH' else '1020'
+                    record_double_entry(
+                        description=f"Sotuv (Naqd/Bank) #{invoice.invoice_number}",
+                        entries=[
+                            {'account_code': acc_code, 'debit': invoice.total_amount, 'credit': 0},
+                            {'account_code': '9010', 'debit': 0, 'credit': invoice.total_amount},
+                        ],
+                        reference=invoice.invoice_number,
+                        user=performed_by
                     )
                 else:
                     raise ValidationError("Mos aktiv kassa topilmadi.")

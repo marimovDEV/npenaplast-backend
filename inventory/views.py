@@ -1,23 +1,26 @@
-from django.db.models import Sum
-from rest_framework import viewsets
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from .models import Inventory
-from .serializers import InventorySerializer
+from rest_framework import viewsets, permissions, filters
+from django_filters.rest_framework import DjangoFilterBackend
+from .models import InventoryBatch, InventoryMovement
+from .serializers import InventoryBatchSerializer, InventoryMovementSerializer
 
-class InventoryViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Inventory.objects.all()
-    serializer_class = InventorySerializer
-    filterset_fields = ('warehouse', 'product')
+class InventoryBatchViewSet(viewsets.ModelViewSet):
+    queryset = InventoryBatch.objects.all().order_by('-created_at')
+    serializer_class = InventoryBatchSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['product', 'location', 'status', 'source']
+    search_fields = ['batch_number', 'product__name']
+    ordering_fields = ['created_at', 'current_weight']
 
-    @action(detail=False, methods=['get'])
-    def balance(self, request):
-        product_id = request.query_params.get('product')
-        warehouse_id = request.query_params.get('warehouse')
-        queryset = self.queryset
-        if product_id:
-            queryset = queryset.filter(product_id=product_id)
-        if warehouse_id:
-            queryset = queryset.filter(warehouse_id=warehouse_id)
-        total = queryset.aggregate(total=Sum('quantity'))['total'] or 0
-        return Response({'total': total})
+    def perform_destroy(self, instance):
+        # Soft delete
+        instance.is_deleted = True
+        instance.save()
+
+class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = InventoryMovement.objects.all().order_by('-timestamp')
+    serializer_class = InventoryMovementSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['batch', 'type', 'from_location', 'to_location']
+    search_fields = ['reference', 'batch__batch_number']

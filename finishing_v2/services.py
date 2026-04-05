@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 from .models import FinishingJob, FinishingStageLog
 from warehouse_v2.models import Warehouse, Material
 from inventory.services import update_inventory
+from finance.services import record_double_entry
 
 def start_finishing_job(job_id, operator):
     job = get_object_or_404(FinishingJob, id=job_id)
@@ -143,6 +144,19 @@ def finish_finishing_job(job_id, finished_qty, waste_qty, operator):
         
         # Add finished to Sklad 4
         update_inventory(job.product, sklad4, finished_qty, batch_number=job.job_number)
+        
+        # Finance: Finished Goods (2030) -> WIP (2020)
+        # Cost move (placeholder value for now)
+        from decimal import Decimal
+        record_double_entry(
+            description=f"Pardozlash (Finishing) yakunlandi: {job.job_number}",
+            entries=[
+                {'account_code': '2030', 'debit': Decimal('0'), 'credit': Decimal('0')}, # Finished Goods
+                {'account_code': '2020', 'debit': Decimal('0'), 'credit': Decimal('0')}, # WIP Move
+            ],
+            reference=job.job_number,
+            user=operator
+        )
         
         # ── Fix 7: Advance Production Pipeline Stage ──
         if job.order_stage:

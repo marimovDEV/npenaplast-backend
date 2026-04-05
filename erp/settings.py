@@ -65,6 +65,10 @@ INSTALLED_APPS = [
     'common_v2',
     'finishing_v2',
     'waste_v2',
+    'finance',
+    'projects',
+    'logistics',
+    'transport',
 
     # Legacy apps (to be removed after migration)
     # 'common',

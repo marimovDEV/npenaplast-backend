@@ -3,7 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from documents.views import DocumentViewSet
-from inventory.views import InventoryViewSet
+from inventory.views import InventoryBatchViewSet, InventoryMovementViewSet
 from rest_framework.routers import DefaultRouter
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework_simplejwt.views import TokenRefreshView
@@ -34,6 +34,10 @@ from reports_v2.views import (
 from transactions.views import TransactionViewSet
 from finishing_v2.views import FinishingJobViewSet
 from waste_v2.views import WasteTaskViewSet, WasteCategoryViewSet
+from transport.views import (
+    DriverViewSet, TransportContractViewSet, WaybillViewSet,
+    TripViewSet, DriverPaymentViewSet, FuelLogViewSet
+)
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
@@ -57,6 +61,12 @@ router.register(r'production/plans', ProductionPlanViewSet)
 router.register(r'production/orders', ProductionOrderViewSet)
 router.register(r'sales/invoices', InvoiceViewSet)
 router.register(r'sales/deliveries', DeliveryViewSet, basename='sales-delivery')
+router.register(r'transport/drivers', DriverViewSet)
+router.register(r'transport/contracts', TransportContractViewSet)
+router.register(r'transport/waybills', WaybillViewSet)
+router.register(r'transport/trips', TripViewSet)
+router.register(r'transport/payments', DriverPaymentViewSet)
+router.register(r'transport/fuel-logs', FuelLogViewSet)
 router.register(r'cnc/jobs', CNCJobViewSet)
 router.register(r'cnc/waste', WasteProcessingViewSet)
 router.register(r'finishing/jobs', FinishingJobViewSet, basename='finishing')
@@ -64,7 +74,8 @@ router.register(r'waste/tasks', WasteTaskViewSet)
 router.register(r'waste/categories', WasteCategoryViewSet)
 router.register(r'reports/history', ReportHistoryViewSet, basename='report-history')
 router.register(r'transactions', TransactionViewSet)
-router.register(r'inventory', InventoryViewSet)
+router.register(r'inventory/batches', InventoryBatchViewSet, basename='inventory-batch')
+router.register(r'inventory/movements', InventoryMovementViewSet, basename='inventory-movement')
 # Legacy/Compatibility aliases
 router.register(r'clients', CustomerViewSet, basename='client-compat')
 router.register(r'sales-orders', InvoiceViewSet, basename='sales-order-compat')

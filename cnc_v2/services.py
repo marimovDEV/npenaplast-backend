@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from inventory.services import update_inventory
 from transactions.services import create_transaction
+from finance.services import record_double_entry
 from common_v2.services import log_action
 from warehouse_v2.models import Warehouse, Material
 from .models import CNCJob, WasteProcessing
@@ -116,6 +117,18 @@ def finish_cnc_job(job_id, finished_qty, waste_m3, operator=None):
             qty=finished_qty,
             trans_type='PRODUCTION',
             batch_number=job.job_number
+        )
+        
+        # Finance: WIP (Decorative) -> WIP (Blocks)
+        # Cost move (placeholder value for now)
+        from decimal import Decimal
+        record_double_entry(
+            description=f"CNC Kesish yakunlandi: {job.job_number}",
+            entries=[
+                {'account_code': '2020', 'debit': Decimal('0'), 'credit': Decimal('0')}, # WIP Move
+            ],
+            reference=job.job_number,
+            user=operator or job.operator
         )
 
         # 3. Record Results & Duration

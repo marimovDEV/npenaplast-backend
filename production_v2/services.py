@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from inventory.services import update_inventory
 from transactions.services import create_transaction
+from finance.services import record_double_entry
 from common_v2.services import log_action
 from warehouse_v2.models import RawMaterialBatch, Warehouse, Material
 from .models import Zames, BlockProduction, DryingProcess, ProductionOrder, ProductionOrderStage, StageActionLog, Bunker
@@ -149,6 +150,17 @@ def finish_drying_process(block_production_id, user=None):
                 trans_type='PRODUCTION',
                 batch_number=block_batch.form_number
             )
+            
+            # Finance: WIP (Blocks) -> WIP (Expanded)
+            # For now, we use a simplified cost estimate or 0-value move if cost is not yet tracked per item
+            record_double_entry(
+                description=f"Blok ishlab chiqarildi: {block_batch.form_number}",
+                entries=[
+                    {'account_code': '2020', 'debit': Decimal('0'), 'credit': Decimal('0')}, # WIP Move
+                ],
+                reference=f"BLOCK-{block_batch.id}",
+                user=user
+            )
 
         log_action(
             user=user,
@@ -242,6 +254,19 @@ def finish_zames(zames, output_weight, user=None):
             qty=output_weight,
             trans_type='PRODUCTION',
             batch_number=batch_no
+        )
+
+        # Finance: WIP (Expanded) Debit, Raw Materials Credit
+        # Total cost = sum of input material costs (needs historical price tracking)
+        # For now, we record the move.
+        record_double_entry(
+            description=f"Zames yakunlandi: {zames.zames_number}",
+            entries=[
+                {'account_code': '2020', 'debit': Decimal('0'), 'credit': Decimal('0')}, # Placeholder for cost
+                {'account_code': '2010', 'debit': Decimal('0'), 'credit': Decimal('0')}, # Placeholder for cost
+            ],
+            reference=f"ZAMES-{zames.zames_number}",
+            user=user or zames.operator
         )
 
         log_action(
