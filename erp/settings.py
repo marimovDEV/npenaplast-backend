@@ -91,6 +91,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'erp.middleware.DebugToolbarMiddleware',
+    'erp.middleware.JsonLocalizationMiddleware',
 ]
 
 ROOT_URLCONF = 'erp.urls'
