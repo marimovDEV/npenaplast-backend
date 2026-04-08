@@ -29,6 +29,8 @@ class WarehouseSerializer(serializers.ModelSerializer):
 
 class StockSerializer(serializers.ModelSerializer):
     material_name = serializers.ReadOnlyField(source='material.name')
+    material_price = serializers.ReadOnlyField(source='material.price')
+    material_unit = serializers.ReadOnlyField(source='material.unit')
     warehouse_name = serializers.ReadOnlyField(source='warehouse.name')
 
     class Meta:
