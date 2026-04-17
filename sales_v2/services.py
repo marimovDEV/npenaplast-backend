@@ -259,11 +259,9 @@ def transition_invoice_status(invoice_id, new_status, performed_by=None):
             return invoice
 
         # 5. CRM Intelligence Trigger (Phase 6)
-        if new_status == 'COMPLETED':
+        if new_status == 'COMPLETED' or new_status == 'Muvaffaqiyatli yakunlandi':
             update_customer_intelligence(invoice.customer.id)
             
-        return invoice
-
         # ── CONFIRMED: Auto-check stock, create ProductionOrder if needed ──
         if new_status == 'CONFIRMED':
             sklad4 = Warehouse.objects.filter(name__icontains='Sklad №4').first()

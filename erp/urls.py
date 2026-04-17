@@ -3,6 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from documents.views import DocumentViewSet
+from erp.monitoring import health_check
 from inventory.views import InventoryBatchViewSet, InventoryMovementViewSet
 from rest_framework.routers import DefaultRouter
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -85,7 +86,7 @@ router.register(r'documents', DocumentViewSet)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('health/', lambda r: HttpResponse("OK"), name='health'),
+    path('health/', health_check, name='health'),
     path('api/users/me/', UserMeView.as_view(), name='user-me'),
     path('api/', include(router.urls)),
     
