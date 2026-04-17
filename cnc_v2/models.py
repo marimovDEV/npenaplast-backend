@@ -11,6 +11,8 @@ class CNCJob(models.Model):
     )
     
     job_number = models.CharField(max_length=50, unique=True)
+    # Master Production Batch
+    production_batch = models.ForeignKey('production_v2.ProductionBatch', on_delete=models.CASCADE, related_name='cnc_jobs', null=True, blank=True)
     # Link to production stage if part of an overall order
     order_stage = models.OneToOneField('production_v2.ProductionOrderStage', on_delete=models.CASCADE, related_name='cnc_job', null=True, blank=True)
     

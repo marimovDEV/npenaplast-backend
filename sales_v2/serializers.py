@@ -21,7 +21,9 @@ class CustomerSerializer(serializers.ModelSerializer):
             'email', 'address', 'stir_inn', 'customer_type', 
             'customer_type_display', 'credit_limit', 'balance',
             'orders_count', 'total_purchased', 'lead_status',
-            'interest_level', 'assigned_manager', 'created_at'
+            'interest_level', 'assigned_manager', 'created_at',
+            'segment', 'debt_status', 'total_revenue', 
+            'avg_order_value', 'last_purchase_date', 'order_count'
         ]
     
     def get_balance(self, obj):

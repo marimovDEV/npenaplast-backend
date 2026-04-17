@@ -719,3 +719,81 @@ def reset_stage_to_pending(stage_id, user=None, reason="Admin reset"):
             object_id=stage.id
         )
         return stage
+
+from decimal import Decimal
+from .models import ProductionBatch
+
+class CostCalculationService:
+    @staticmethod
+    def calculate_batch_cost(batch: ProductionBatch, auto_distribute=True):
+        """
+        Calculates and sums all cost components for a batch.
+        Runs when the batch goes from OPEN to CLOSED.
+        """
+        # 1. Material Cost
+        material_cost = Decimal(0)
+        for z in batch.zames_list.all():
+            for item in z.items.all():
+                if item.batch and item.batch.price_per_unit:
+                    material_cost += Decimal(str(item.quantity)) * item.batch.price_per_unit
+                elif item.material and item.material.price:
+                    material_cost += Decimal(str(item.quantity)) * item.material.price
+        
+        # 2. Energy
+        energy_cost = Decimal(0)
+        for eu in batch.energy_usages.all():
+            energy_cost += eu.total_cost
+
+        if auto_distribute and energy_cost == 0:
+            # Hybrid fallback: If no explicit energy was placed, distribute generic.
+            avg_zames = batch.zames_list.count()
+            fallback_gas = Decimal(12 * avg_zames) * Decimal('1500.00')
+            fallback_elec = Decimal(45 * avg_zames) * Decimal('450.00')
+            energy_cost = fallback_gas + fallback_elec
+            batch.cost_confidence = 'ESTIMATED'
+        else:
+            batch.cost_confidence = 'REAL' if energy_cost > 0 else 'ESTIMATED'
+
+        # 3. Labor
+        labor_cost = Decimal(0)
+        for lc in batch.labor_costs.all():
+            labor_cost += lc.total_cost
+
+        # 4. Overhead
+        overhead_cost = Decimal(0)
+        for oc in batch.overhead_costs.all():
+            overhead_cost += oc.amount
+
+        # 5. CNC
+        cnc_cost = Decimal(0)
+        for job in batch.cnc_jobs.all():
+            # Estimate CNC cost based on duration or waste if needed
+            # For now, placeholder or link to specific energy usage
+            pass
+
+        total = material_cost + energy_cost + labor_cost + overhead_cost + cnc_cost
+        
+        # Calculate unit cost
+        total_blocks = batch.total_output_qty
+        if total_blocks <= 0:
+            total_blocks = 0
+            for bp in batch.blocks.all():
+                total_blocks += bp.block_count
+            batch.total_output_qty = total_blocks
+
+        unit_cost = total / Decimal(str(total_blocks)) if total_blocks > 0 else total
+
+        # Update batch
+        batch.material_cost = material_cost
+        batch.energy_cost = energy_cost
+        batch.labor_cost = labor_cost
+        batch.overhead_cost = overhead_cost
+        batch.cnc_cost = cnc_cost
+        batch.total_cost = total
+        batch.unit_cost = unit_cost
+        
+        batch.status = 'CLOSED'
+        batch.end_time = timezone.now()
+        batch.save()
+        return batch
+

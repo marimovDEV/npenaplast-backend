@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from django.http import FileResponse
 from django.db.models import Sum, Count, F, Q
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 from warehouse_v2.models import RawMaterialBatch, Stock, Material
 from production_v2.models import Zames, BlockProduction
 from sales_v2.models import Invoice, SaleItem
@@ -14,7 +14,26 @@ from .models import ReportHistory
 from .serializers import ReportHistorySerializer
 from accounts.permissions import IsAdmin
 from common_v2.mixins import NoDeleteMixin
-from .services import generate_report_file
+from .services import generate_report_file, get_inventory_valuation, get_profitability_summary
+from .xlsx_services import generate_enterprise_xlsx
+from django.http import HttpResponse
+
+class EnterpriseXLSXExportView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        report_type = request.query_params.get('type', 'PROFIT_LOSS')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        wb = generate_enterprise_xlsx(report_type, start_date, end_date)
+        
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename={report_type}_{datetime.now().strftime("%Y%m%d")}.xlsx'
+        wb.save(response)
+        return response
 
 
 def _parse_start_date(raw_value, default_start):
@@ -62,14 +81,12 @@ class GeneralAnalyticsView(APIView):
         ).aggregate(total=Sum('total_amount'))['total'] or 0
         total_prod = BlockProduction.objects.filter(date__gte=start_date).aggregate(total=Sum('block_count'))['total'] or 0
         total_waste = WasteProcessing.objects.filter(date__date__gte=start_date).aggregate(total=Sum('waste_amount_kg'))['total'] or 0
+        # Enterprise Phase 5: Real Inventory Valuation
+        stock_value = get_inventory_valuation()
         
-        # stock_value = Sum(Stock.quantity * Material.price)
-        stock_value = 0
-        stocks = Stock.objects.all().select_related('material')
-        for s in stocks:
-            if s.material.price:
-                stock_value += s.quantity * float(s.material.price)
-
+        # Enterprise Phase 5: Profitability Summary
+        prof_summary = get_profitability_summary('This Month')
+        
         # 2. Charts (Daily Sales Trend)
         sales_trend = []
         for i in range(30, -1, -1):
@@ -84,13 +101,21 @@ class GeneralAnalyticsView(APIView):
                     'value': float(day_sales)
                 })
 
+        # Enterprise Phase 7: Heuristics
+        from .heuristics import get_supply_chain_heuristics, get_cash_gap_prediction
+        supply_alerts = get_supply_chain_heuristics()
+        cash_prediction = get_cash_gap_prediction()
+
         return Response({
             'kpis': {
                 'total_sales': float(total_sales),
                 'total_production': int(total_prod),
                 'total_waste_kg': float(total_waste),
                 'waste_per_block_kg': round((total_waste / total_prod), 4) if total_prod > 0 else 0,
-                'stock_value': float(stock_value)
+                'stock_value': float(stock_value),
+                'monthly_profit': float(prof_summary['total_profit']),
+                'avg_margin': prof_summary['avg_margin'],
+                'loss_count': prof_summary['loss_count']
             },
             'charts': {
                 'sales_trend': sales_trend,
@@ -99,8 +124,32 @@ class GeneralAnalyticsView(APIView):
                     {'name': 'Ishlab chiqarish', 'value': 25},
                     {'name': 'Pardozlash', 'value': 10},
                 ]
+            },
+            'heuristics': {
+                'supply_alerts': supply_alerts,
+                'cash_prediction': cash_prediction
             }
         })
+
+class ProfitabilityDetailView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        items = SaleItem.objects.select_related('invoice', 'product', 'production_batch').order_by('-invoice__date')[:50]
+        data = []
+        for item in items:
+            data.append({
+                'invoice': item.invoice.invoice_number,
+                'product': item.product.name,
+                'quantity': item.quantity,
+                'price': float(item.price),
+                'cost': float(item.cost_price),
+                'profit': float(item.profit),
+                'margin': item.margin_percent,
+                'date': item.invoice.date.strftime('%Y-%m-%d'),
+                'is_legacy': item.is_legacy
+            })
+        return Response(data)
 
 class RawMaterialReportView(APIView):
     permission_classes = [IsAdmin]

@@ -5,7 +5,8 @@ from inventory.models import InventoryBatch
 from warehouse_v2.models import Warehouse, Material
 from rest_framework.exceptions import ValidationError
 from finance_v2.models import FinancialTransaction, Cashbox, ClientBalance
-from finance.services import record_double_entry
+from accounting.signals import _safe_create_entry
+from decimal import Decimal
 
 
 def _release_reserved_inventory(item):
@@ -105,6 +106,16 @@ def create_invoice(warehouse_id, customer_id, items, payment_method='CASH', deli
     invoice_number = f"ORD-{str(new_num).zfill(4)}"
 
     with transaction.atomic():
+        # Phase 6: Credit Limit Guard
+        from finance_v2.models import ClientBalance
+        cb, _ = ClientBalance.objects.get_or_create(customer=customer)
+        current_debt = float(cb.total_debt)
+        
+        # Phase 6: Dynamic Pricing (VIP Suggestion)
+        if customer.segment == 'VIP' and float(discount_amount or 0) == 0:
+            # We don't know total_amount yet, so we will apply it after calculating items
+            pass 
+        
         invoice = Invoice.objects.create(
             invoice_number=invoice_number,
             customer=customer,
@@ -146,12 +157,24 @@ def create_invoice(warehouse_id, customer_id, items, payment_method='CASH', deli
                 inv.reserved_weight = float(inv.reserved_weight) + qty
                 inv.save()
 
-            # 2. Create Sale Item
+            # 2. Find and Link Batch (FIFO Locking)
+            prod_batch = None
+            raw_batch = None
+            if batch:
+                from production_v2.models import ProductionBatch
+                from warehouse_v2.models import RawMaterialBatch
+                prod_batch = ProductionBatch.objects.filter(batch_number=batch).first()
+                if not prod_batch:
+                    raw_batch = RawMaterialBatch.objects.filter(batch_number=batch).first()
+
+            # 3. Create Sale Item
             SaleItem.objects.create(
                 invoice=invoice,
                 product=product,
                 source_warehouse=warehouse,
                 batch_number=batch,
+                production_batch=prod_batch,
+                raw_material_batch=raw_batch,
                 quantity=qty,
                 price=price
             )
@@ -163,11 +186,60 @@ def create_invoice(warehouse_id, customer_id, items, payment_method='CASH', deli
         if discount_amount > total_amount:
             raise ValidationError("Chegirma umumiy summadan katta bo'lishi mumkin emas.")
 
+        # Phase 6: VIP Auto-Discount (10%)
+        if customer.segment == 'VIP' and discount_amount == 0:
+            discount_amount = total_amount * 0.10
+        
         invoice.total_amount = total_amount - discount_amount
+        invoice.discount_amount = discount_amount
         invoice.save()
+
+        # Phase 6: Post-Invoice Credit Limit Validation
+        if payment_method == 'DEBT':
+            new_total_debt = current_debt + float(invoice.total_amount)
+            if customer.credit_limit > 0 and new_total_debt > float(customer.credit_limit):
+                raise ValidationError(
+                    f"Kredit limiti oshib ketdi! Mijoz limiti: {customer.credit_limit:,.0f} UZS. "
+                    f"Hozirgi qarz: {current_debt:,.0f} UZS. "
+                    f"Yangi buyurtma: {invoice.total_amount:,.0f} UZS. "
+                )
+
         _ensure_sales_document(invoice, warehouse, items, user=created_by)
 
     return invoice
+
+def update_customer_intelligence(customer_id):
+    """Refreshes CRM metrics and segmentation (Phase 6)."""
+    from .models import Customer, Invoice
+    from finance_v2.models import ClientBalance
+    from django.db.models import Sum, Avg
+    
+    customer = Customer.objects.get(id=customer_id)
+    invoices = Invoice.objects.filter(customer=customer, status='COMPLETED')
+    
+    total_rev = invoices.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
+    customer.total_revenue = total_rev
+    customer.order_count = invoices.count()
+    customer.avg_order_value = invoices.aggregate(Avg('total_amount'))['total_amount__avg'] or 0
+    
+    last_inv = invoices.order_by('-date').first()
+    if last_inv:
+        customer.last_purchase_date = last_inv.date
+        
+    # VIP Threshold: 100M UZS
+    if total_rev >= 100000000:
+        customer.segment = 'VIP'
+    
+    cb, _ = ClientBalance.objects.get_or_create(customer=customer)
+    if cb.overdue_debt > 0:
+        customer.segment = 'RISK'
+        customer.debt_status = 'OVERDUE'
+    else:
+        customer.debt_status = 'HEALTHY'
+        if customer.segment != 'VIP':
+            customer.segment = 'REGULAR'
+            
+    customer.save()
 
 def transition_invoice_status(invoice_id, new_status, performed_by=None):
     """
@@ -185,6 +257,12 @@ def transition_invoice_status(invoice_id, new_status, performed_by=None):
         
         if old_status == new_status:
             return invoice
+
+        # 5. CRM Intelligence Trigger (Phase 6)
+        if new_status == 'COMPLETED':
+            update_customer_intelligence(invoice.customer.id)
+            
+        return invoice
 
         # ── CONFIRMED: Auto-check stock, create ProductionOrder if needed ──
         if new_status == 'CONFIRMED':
@@ -257,6 +335,7 @@ def transition_invoice_status(invoice_id, new_status, performed_by=None):
                     pass  # Delivery may already exist (OneToOne)
 
             _ensure_waybill_document(invoice, user=performed_by)
+            _finalize_profitability_and_cogs(invoice, user=performed_by)
 
         # ── EN_ROUTE: Courier picked up ──
         elif new_status == 'EN_ROUTE':
@@ -363,6 +442,63 @@ def create_production_order_from_sale(invoice_id, product_id, quantity, priority
     invoice.production_order_id = p_order.id
     invoice.save()
     return p_order
+
+def _finalize_profitability_and_cogs(invoice, user=None):
+    """
+    Finalizes profit calculation and records COGS at SHIPPED status.
+    Enterprise Level: DR 9110 / CR 2810.
+    """
+    total_profit = Decimal(0)
+    total_revenue = Decimal(0)
+    
+    for item in invoice.items.all():
+        cost_per_unit = Decimal(0)
+        
+        # 1. Determine unit cost (Batch FIFO vs AVG Legacy)
+        if item.production_batch:
+            cost_per_unit = item.production_batch.unit_cost
+        elif item.raw_material_batch:
+            cost_per_unit = item.raw_material_batch.price_per_unit
+        else:
+            # Fallback to standard price (Legacy)
+            cost_per_unit = item.product.price
+            item.is_legacy = True
+            
+        item.cost_price = cost_per_unit
+        revenue = Decimal(str(item.price)) * Decimal(str(item.quantity))
+        item.profit = revenue - (cost_per_unit * Decimal(str(item.quantity)))
+        
+        if revenue > 0:
+            item.margin_percent = float((item.profit / revenue) * 100)
+        else:
+            item.margin_percent = -100 if item.profit < 0 else 0
+            
+        item.save()
+        total_profit += item.profit
+        total_revenue += revenue
+        
+        # 2. Record COGS Journal Entry
+        cogs_amount = cost_per_unit * Decimal(str(item.quantity))
+        if cogs_amount > 0:
+            # DR: 9110 (Sotuv tannarxi)  CR: 2810 (Tayyor mahsulot) or 1010
+            # Standard logic: categorize by product type
+            inv_acc = '2810' if item.product.category == 'FINISHED' else '1010'
+            _safe_create_entry(
+                description=f"COGS: {invoice.invoice_number} - {item.product.name} (Qty: {item.quantity})",
+                lines=[
+                    {'account_code': '9110', 'debit': cogs_amount, 'credit': 0, 'description': "Sotilgan mahsulot tannarxi"},
+                    {'account_code': inv_acc, 'debit': 0, 'credit': cogs_amount, 'description': f"Zahirani hisobdan chiqarish: {item.product.name}"},
+                ],
+                source_type='SALE',
+                source_id=invoice.id,
+                source_description=f"COGS for {invoice.invoice_number}",
+                user=user
+            )
+
+    invoice.total_profit = total_profit
+    if total_revenue > 0:
+        invoice.avg_margin_percent = float((total_profit / total_revenue) * 100)
+    invoice.save(update_fields=['total_profit', 'avg_margin_percent'])
 
 def create_contact_log(customer_id, manager, contact_type, notes, follow_up_date=None):
     """

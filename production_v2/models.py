@@ -20,6 +20,36 @@ class RecipeItem(models.Model):
     def __str__(self):
         return f"{self.recipe.name}: {self.material.name} x {self.quantity}"
 
+class ProductionBatch(models.Model):
+    batch_number = models.CharField(max_length=100, unique=True)
+    status = models.CharField(max_length=20, choices=(
+        ('OPEN', 'Ochiq (Hisoblanmoqda)'),
+        ('CLOSED', 'Yopilgan (Final)'),
+    ), default='OPEN')
+    
+    start_time = models.DateTimeField(auto_now_add=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    
+    total_output_qty = models.FloatField(default=0, help_text="Total blocks or output units")
+    
+    # Costs
+    material_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    energy_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    labor_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    overhead_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    cnc_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    
+    total_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    unit_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    
+    cost_confidence = models.CharField(max_length=20, choices=(
+        ('REAL', 'Haqiqiy (Kiritilgan)'),
+        ('ESTIMATED', 'Taxminiy (Avto-Taqsimlangan)'),
+    ), default='ESTIMATED')
+
+    def __str__(self):
+        return f"Batch {self.batch_number} ({self.status}) - Unit Cost: {self.unit_cost}"
+
 class Zames(models.Model):
     STATUS_CHOICES = (
         ('PENDING', 'Kutilmoqda'),
@@ -28,6 +58,7 @@ class Zames(models.Model):
         ('CANCELLED', 'Bekor qilindi'),
     )
 
+    production_batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='zames_list', null=True, blank=True)
     zames_number = models.CharField(max_length=50, unique=True)
     recipe = models.ForeignKey(Recipe, on_delete=models.SET_NULL, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
@@ -65,6 +96,7 @@ class Bunker(models.Model):
         return f"{self.name} ({'Occupied' if self.is_occupied else 'Free'})"
 
 class BunkerLoad(models.Model):
+    production_batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='bunker_loads', null=True, blank=True)
     zames = models.ForeignKey(Zames, on_delete=models.CASCADE, related_name='loads')
     bunker = models.ForeignKey(Bunker, on_delete=models.CASCADE, related_name='loads')
     load_time = models.DateTimeField(auto_now_add=True)
@@ -82,6 +114,7 @@ class BlockProduction(models.Model):
         ('SOLD', 'Sotilgan'),
     )
 
+    production_batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='blocks', null=True, blank=True)
     zames = models.ForeignKey(Zames, on_delete=models.CASCADE, related_name='blocks')
     form_number = models.CharField(max_length=50)
     block_count = models.IntegerField()
@@ -259,3 +292,35 @@ class StageActionLog(models.Model):
 
     def __str__(self):
         return f"{self.order.order_number} - {self.stage_type} - {self.action} by {self.user}"
+
+# ═══════════════════════════════════════════════════
+# PHASE 4: COST ENGINE (ENTERPRISE PRODUCT COSTING)
+# ═══════════════════════════════════════════════════
+
+class EnergyUsage(models.Model):
+    batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='energy_usages')
+    type = models.CharField(max_length=20, choices=(('GAS', 'Gaz'), ('ELECTRICITY', 'Elektr')))
+    quantity = models.FloatField(help_text="m3 or kWh")
+    price_per_unit = models.DecimalField(max_digits=18, decimal_places=2, help_text="Tarif narxi")
+    total_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    is_auto_calculated = models.BooleanField(default=False)
+    
+    def save(self, *args, **kwargs):
+        self.total_cost = float(self.quantity) * float(self.price_per_unit)
+        super().save(*args, **kwargs)
+
+class LaborCost(models.Model):
+    batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='labor_costs')
+    worker = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    hours = models.FloatField(help_text="Ishlangan soat yoki norma")
+    rate_per_hour = models.DecimalField(max_digits=18, decimal_places=2, help_text="Soatbay yoki ishlab chiqarilgan m3/stk uchun stavka")
+    total_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    
+    def save(self, *args, **kwargs):
+        self.total_cost = float(self.hours) * float(self.rate_per_hour)
+        super().save(*args, **kwargs)
+
+class OverheadCost(models.Model):
+    batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='overhead_costs')
+    cost_type = models.CharField(max_length=50, help_text="Masalan: Ijara, Amortizatsiya, Soliq qismi")
+    amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)

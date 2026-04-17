@@ -28,6 +28,11 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='SUCCESS')
 
+    # Enterprise Audit Fields (NEW)
+    old_value = models.JSONField(null=True, blank=True, help_text="O'zgarishdan oldingi qiymat")
+    new_value = models.JSONField(null=True, blank=True, help_text="O'zgarishdan keyingi qiymat")
+    model_name = models.CharField(max_length=100, null=True, blank=True, help_text="Model nomi (masalan: Invoice)")
+
     def __str__(self):
         return f"[{self.module}] {self.user} - {self.action}: {self.description[:50]}"
 

@@ -157,6 +157,19 @@ def rows_to_pdf_bytes(title: str, rows):
     return bytes(pdf)
 
 
+def build_export_response_content(title: str, rows, file_format: str):
+    """
+    Helper for views to quickly generate content, extension, and content_type.
+    """
+    if file_format == 'EXCEL' or file_format == 'CSV':
+        content = rows_to_csv_bytes(rows)
+        return content, 'csv', 'text/csv'
+    
+    # Default to PDF
+    content = rows_to_pdf_bytes(title, rows)
+    return content, 'pdf', 'application/pdf'
+
+
 def generate_report_file(report_history):
     start_date, end_date = _parse_period(report_history.period)
     rows = _build_rows(report_history.report_type, start_date, end_date)
@@ -177,7 +190,65 @@ def generate_report_file(report_history):
     return report_history
 
 
-def build_export_response_content(title: str, rows, file_format: str):
-    if file_format == 'EXCEL':
-        return rows_to_csv_bytes(rows), 'csv', 'text/csv; charset=utf-8'
-    return rows_to_pdf_bytes(title, rows), 'pdf', 'application/pdf'
+def get_inventory_valuation():
+    """
+    Calculates total stock value (money in warehouses).
+    Uses real batch unit costs where available.
+    """
+    from production_v2.models import ProductionBatch
+    
+    stocks = Stock.objects.select_related('material', 'warehouse')
+    total_value = Decimal('0')
+    
+    # Pre-fetch latest batch costs for finished materials to avoid N+1
+    # We take the latest CLOSED batch for each material type (usually blocks)
+    # Since blocks are products, we check ProductionBatch which has the unit_cost
+    latest_costs = {}
+    
+    for s in stocks:
+        unit_price = s.material.price or Decimal('0')
+        
+        if s.material.category == 'FINISHED':
+            # Check if we have a cached last cost for this product's batches
+            if s.material.id not in latest_costs:
+                # Find latest closed batch that produced this type of material
+                # Note: ProductionBatch doesn't link to Material directly, but output does.
+                # As a shortcut, we take the most recent batch's unit_cost for all finished goods
+                # unless further granular mapping is implemented.
+                latest_pb = ProductionBatch.objects.filter(status='CLOSED').order_by('-end_time').first()
+                if latest_pb:
+                    latest_costs[s.material.id] = latest_pb.unit_cost
+                else:
+                    latest_costs[s.material.id] = unit_price
+            
+            unit_price = latest_costs.get(s.material.id, unit_price)
+            
+        value = Decimal(str(s.quantity)) * unit_price
+        total_value += value
+        
+    return total_value
+
+def get_profitability_summary(period='This Month'):
+    """
+    Aggregates profit, margin, and identifies loss-making products.
+    """
+    start_date, end_date = _parse_period(period)
+    invoices = Invoice.objects.filter(
+        date__date__gte=start_date, 
+        date__date__lte=end_date,
+        status='COMPLETED'
+    )
+    
+    metrics = {
+        'total_revenue': invoices.aggregate(Sum('total_amount'))['total_amount__sum'] or Decimal('0'),
+        'total_profit': invoices.aggregate(Sum('total_profit'))['total_profit__sum'] or Decimal('0'),
+        'avg_margin': 0,
+        'loss_count': invoices.filter(total_profit__lt=0).count(),
+        'low_margin_count': invoices.filter(avg_margin_percent__lt=15).count(),
+    }
+    
+    if metrics['total_revenue'] > 0:
+        metrics['avg_margin'] = round((metrics['total_profit'] / metrics['total_revenue']) * 100, 2)
+        
+    return metrics
+

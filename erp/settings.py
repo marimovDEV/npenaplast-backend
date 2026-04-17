@@ -16,30 +16,37 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+from decouple import config
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-yky@u@f5gv-c!97cg5bpb3i*ffif*^vl@8xlz5b7&7ry8l086('
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-yky@u@f5gv-c!97cg5bpb3i*ffif*^vl@8xlz5b7&7ry8l086(')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ['penaplast.api.yolyolakayt.uz', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='penaplast.api.yolyolakayt.uz,localhost,127.0.0.1').split(',')
 
 # Frontend URL for connection reference
-FRONTEND_URL = "https://penaplast-crm.vercel.app"
+FRONTEND_URL = config('FRONTEND_URL', default="https://penaplast-crm.vercel.app")
 
 # Security settings for production
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=True, cast=bool)
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -47,12 +54,16 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     
+    'channels',
+    'django_celery_beat',
+    
     # 3rd party
     'rest_framework',
     'corsheaders',
     'rest_framework_simplejwt',
     'django_filters',
     'drf_spectacular',
+    'csp',
 
     # Local apps (v2 Architecture)
     'accounts',
@@ -65,14 +76,16 @@ INSTALLED_APPS = [
     'common_v2',
     'finishing_v2',
     'waste_v2',
+    'accounting',
+    'budgets',
+    'compliance',
+    'alerts',
     'finance',
     'projects',
     'logistics',
     'transport',
 
-    # Legacy apps (to be removed after migration)
-    # 'common',
-    # 'users',
+    # Legacy apps
     'products',
     'warehouse',
     'inventory',
@@ -81,24 +94,9 @@ INSTALLED_APPS = [
     'transactions',
 ]
 
-MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'erp.middleware.DebugToolbarMiddleware',
-    'erp.middleware.JsonLocalizationMiddleware',
-]
-
-ROOT_URLCONF = 'erp.urls'
-
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'BACKEND': 'django.core.handlers.wsgi.WSGIHandler' if False else 'django.template.backends.django.DjangoTemplates',
         'DIRS': [],
         'APP_DIRS': True,
         'OPTIONS': {
@@ -112,16 +110,50 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'erp.wsgi.application'
+ASGI_APPLICATION = 'erp.asgi.application'
+
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.security.SecurityMiddleware',
+    'csp.middleware.CSPMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'erp.middleware.JsonLocalizationMiddleware',
+]
+
+ROOT_URLCONF = 'erp.urls'
+
+# Celery Configuration
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [config('REDIS_URL', default='redis://localhost:6379/1')],
+        },
+    },
+}
 
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+import dj_database_url
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db_v2.sqlite3',
-    }
+    'default': dj_database_url.config(
+        default=f'sqlite:////{BASE_DIR}/db_v2.sqlite3',
+        conn_max_age=600
+    )
 }
 
 

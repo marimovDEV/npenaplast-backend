@@ -126,6 +126,11 @@ class InternalTransfer(models.Model):
 class ClientBalance(models.Model):
     customer = models.OneToOneField('sales_v2.Customer', on_delete=models.CASCADE, related_name='balance')
     total_debt = models.DecimalField(max_digits=15, decimal_places=2, default=0) # Negative means we owe them
+    
+    # Phase 6 Enhancements
+    overdue_debt = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    last_payment_date = models.DateTimeField(null=True, blank=True)
+    
     last_updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):

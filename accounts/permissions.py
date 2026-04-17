@@ -123,3 +123,36 @@ class IsDocumentOperator(permissions.BasePermission):
             or IsSalesManager().has_permission(request, view)
             or IsCourier().has_permission(request, view)
         )
+
+
+class IsAccountant(permissions.BasePermission):
+    """Buxgalter role — Accounting access, reports, audit view, limited edit."""
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        if request.user.is_superuser:
+            return True
+        return has_any_role(request.user,
+            'Bosh Admin', 'Admin', 'Buxgalter',
+            'SUPERADMIN', 'ADMIN', 'ACCOUNTANT'
+        )
+
+
+class IsFinanceManager(permissions.BasePermission):
+    """Moliya boshqaruvchi — full finance and accounting access."""
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        if request.user.is_superuser:
+            return True
+        return has_any_role(request.user,
+            'Bosh Admin', 'Admin', 'Buxgalter', 'Moliya boshqaruvchi',
+            'SUPERADMIN', 'ADMIN', 'ACCOUNTANT', 'FINANCE_MANAGER'
+        )
+
+
+class IsAdminOrAccountant(permissions.BasePermission):
+    """Admin yoki Buxgalter — for accounting-related views."""
+    def has_permission(self, request, view):
+        return IsAdmin().has_permission(request, view) or IsAccountant().has_permission(request, view)
+

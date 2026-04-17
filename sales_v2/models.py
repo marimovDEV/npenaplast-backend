@@ -26,6 +26,25 @@ class Customer(models.Model):
     stir_inn = models.CharField(max_length=20, blank=True, null=True, verbose_name="STIR / INN")
     customer_type = models.CharField(max_length=20, choices=CUSTOMER_TYPE_CHOICES, default='RETAIL')
     
+    # CRM & Intelligence Upgrade (Phase 6)
+    SEGMENT_CHOICES = (
+        ('VIP', 'VIP (Gold)'),
+        ('REGULAR', 'Oddiy (Regular)'),
+        ('RISK', 'Xavfli (Risk / Bad Debt)'),
+    )
+    DEBT_STATUS_CHOICES = (
+        ('HEALTHY', 'Sog\'lom (Healthy)'),
+        ('OVERDUE', 'Muddati o\'tgan (Overdue)'),
+    )
+    
+    segment = models.CharField(max_length=20, choices=SEGMENT_CHOICES, default='REGULAR')
+    debt_status = models.CharField(max_length=20, choices=DEBT_STATUS_CHOICES, default='HEALTHY')
+    
+    total_revenue = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    avg_order_value = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    last_purchase_date = models.DateTimeField(null=True, blank=True)
+    order_count = models.IntegerField(default=0)
+    
     # CRM Fields
     lead_status = models.CharField(max_length=20, choices=LEAD_STATUS_CHOICES, default='LEAD')
     interest_level = models.CharField(max_length=10, choices=INTEREST_CHOICES, default='MEDIUM')
@@ -89,6 +108,10 @@ class Invoice(models.Model):
     production_order_id = models.IntegerField(null=True, blank=True, help_text="ID of the related production order if MTO")
     
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    
+    # Phase 5: Profitability
+    total_profit = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    avg_margin_percent = models.FloatField(default=0)
 
     def __str__(self):
         return self.invoice_number
@@ -98,8 +121,19 @@ class SaleItem(models.Model):
     product = models.ForeignKey('warehouse_v2.Material', on_delete=models.CASCADE)
     source_warehouse = models.ForeignKey('warehouse_v2.Warehouse', on_delete=models.SET_NULL, null=True, blank=True)
     batch_number = models.CharField(max_length=100, null=True, blank=True)
+    
+    # Phase 5: Profitability & Batch Locking
+    production_batch = models.ForeignKey('production_v2.ProductionBatch', on_delete=models.SET_NULL, null=True, blank=True, related_name='sales')
+    raw_material_batch = models.ForeignKey('warehouse_v2.RawMaterialBatch', on_delete=models.SET_NULL, null=True, blank=True, related_name='sales')
+    
     quantity = models.FloatField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    cost_price = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Unit cost at time of sale")
+    profit = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    margin_percent = models.FloatField(default=0)
+    
+    is_legacy = models.BooleanField(default=False, help_text="True if using AVG cost instead of Batch FIFO")
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"

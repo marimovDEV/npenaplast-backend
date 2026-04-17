@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 class Supplier(models.Model):
     name = models.CharField(max_length=255)
@@ -105,3 +106,44 @@ class BatchReservation(models.Model):
 
     def __str__(self):
         return f"Reservation: {self.quantity} from {self.batch.batch_number} for {self.document.number}"
+
+# ═══════════════════════════════════════════════════
+# PHASE 3: INVENTORY RECONCILIATION
+# ═══════════════════════════════════════════════════
+
+class InventoryAudit(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Qoralama'
+        IN_PROGRESS = 'IN_PROGRESS', 'Sanalyapti'
+        REVIEW = 'REVIEW', 'Tasdiqlash kutilmoqda'
+        COMPLETED = 'COMPLETED', 'Yakunlangan'
+    
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE)
+    date = models.DateField(default=timezone.now)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    auditor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='audits_conducted')
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='audits_approved')
+    remarks = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Sklad Auditi'
+        verbose_name_plural = 'Sklad Auditlari'
+
+    def __str__(self):
+        return f"Audit: {self.warehouse.name} - {self.date}"
+
+class InventoryAuditLine(models.Model):
+    audit = models.ForeignKey(InventoryAudit, on_delete=models.CASCADE, related_name='lines')
+    material = models.ForeignKey(Material, on_delete=models.CASCADE)
+    system_qty = models.FloatField(help_text="Tizimdagi qoldiq")
+    actual_qty = models.FloatField(help_text="Haqiqiy sanalgan qoldiq", null=True, blank=True)
+    
+    @property
+    def variance(self):
+        if self.actual_qty is None:
+            return 0
+        return self.actual_qty - self.system_qty
+
+    def __str__(self):
+        return f"{self.material.name}: Sys {self.system_qty} vs Act {self.actual_qty}"

@@ -29,7 +29,7 @@ from common_v2.compatibility import DashboardCompatibilityView
 from reports_v2.views import (
     RawMaterialReportView, ProductionEfficiencyView,
     WarehouseBalanceView, SalesReportView, GeneralAnalyticsView,
-    ReportHistoryViewSet
+    ProfitabilityDetailView, ReportHistoryViewSet, EnterpriseXLSXExportView
 )
 from transactions.views import TransactionViewSet
 from finishing_v2.views import FinishingJobViewSet
@@ -85,6 +85,7 @@ router.register(r'documents', DocumentViewSet)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('health/', lambda r: HttpResponse("OK"), name='health'),
     path('api/users/me/', UserMeView.as_view(), name='user-me'),
     path('api/', include(router.urls)),
     
@@ -102,10 +103,16 @@ urlpatterns = [
     path('api/reports/efficiency/', ProductionEfficiencyView.as_view(), name='report-efficiency'),
     path('api/reports/balances/', WarehouseBalanceView.as_view(), name='report-balances'),
     path('api/reports/sales/', SalesReportView.as_view(), name='report-sales'),
+    path('api/reports/profitability/', ProfitabilityDetailView.as_view(), name='report-profitability'),
+    path('api/reports/export/xlsx/', EnterpriseXLSXExportView.as_view(), name='report-export-xlsx'),
 
     # New Modules
     path('api/finance/', include('finance_v2.urls')),
     path('api/sales/', include('sales_v2.urls')),
+    path('api/accounting/', include('accounting.urls')),
+    path('api/budgets/', include('budgets.urls')),
+    path('api/compliance/', include('compliance.urls')),
+    path('api/alerts/', include('alerts.urls')),
 
     # Auth
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
