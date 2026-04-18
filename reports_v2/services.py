@@ -231,7 +231,10 @@ def get_inventory_valuation():
 def get_profitability_summary(period='This Month'):
     """
     Aggregates profit, margin, and identifies loss-making products.
+    Calculates true net profit by subtracting actual expenses from gross profit.
     """
+    from finance_v2.models import FinancialTransaction
+    
     start_date, end_date = _parse_period(period)
     invoices = Invoice.objects.filter(
         date__date__gte=start_date, 
@@ -239,16 +242,28 @@ def get_profitability_summary(period='This Month'):
         status='COMPLETED'
     )
     
+    gross_profit = invoices.aggregate(Sum('total_profit'))['total_profit__sum'] or Decimal('0')
+    
+    expenses = FinancialTransaction.objects.filter(
+        created_at__date__gte=start_date,
+        created_at__date__lte=end_date,
+        type='EXPENSE'
+    ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0')
+    
+    net_profit = gross_profit - expenses
+
     metrics = {
         'total_revenue': invoices.aggregate(Sum('total_amount'))['total_amount__sum'] or Decimal('0'),
-        'total_profit': invoices.aggregate(Sum('total_profit'))['total_profit__sum'] or Decimal('0'),
+        'total_profit': net_profit,
+        'gross_profit': gross_profit,
+        'total_expenses': expenses,
         'avg_margin': 0,
         'loss_count': invoices.filter(total_profit__lt=0).count(),
         'low_margin_count': invoices.filter(avg_margin_percent__lt=15).count(),
     }
     
     if metrics['total_revenue'] > 0:
-        metrics['avg_margin'] = round((metrics['total_profit'] / metrics['total_revenue']) * 100, 2)
+        metrics['avg_margin'] = round((metrics['gross_profit'] / metrics['total_revenue']) * 100, 2)
         
     return metrics
 

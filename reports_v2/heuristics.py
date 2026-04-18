@@ -14,17 +14,12 @@ def get_supply_chain_heuristics():
     stocks = Stock.objects.all().select_related('material', 'warehouse')
     
     for s in stocks:
-        # Heuristic placeholder: Avg usage based on material value
-        avg_daily_usage = float(s.material.unit_price) / 1000 
         current_qty = float(s.quantity)
+        min_qty = float(s.min_level)
         
-        if avg_daily_usage > 0:
-            days_left = round(current_qty / avg_daily_usage, 1)
-        else:
-            days_left = 999
-            
-        if days_left < 7:
-            priority = 'CRITICAL' if days_left < 3 else 'WARNING'
+        if min_qty > 0 and current_qty <= min_qty:
+            days_left = 1 if current_qty == 0 else round(current_qty / min_qty * 3, 1) # simple estimation
+            priority = 'CRITICAL' if current_qty <= (min_qty * 0.5) else 'WARNING'
             results.append({
                 'id': f"supply_{s.id}",
                 'material': s.material.name,
@@ -34,7 +29,7 @@ def get_supply_chain_heuristics():
                 'priority': 0 if priority == 'CRITICAL' else 1,
                 'action_type': 'ORDER',
                 'action_label': 'Zakaz berish',
-                'message': f"{s.material.name} tugayapti! {days_left} kundan keyin zaxira qolmaydi."
+                'message': f"{s.material.name} zaxirasi minimal darajaga yetdi ({current_qty} qoldi)."
             })
             
     return sorted(results, key=lambda x: x['priority'])
@@ -60,28 +55,44 @@ def get_cash_gap_prediction():
 
 def get_top_business_metrics():
     """
-    Strategic insights for the Decision Engine (Phase 10).
-    Identifies the single biggest Risk and Opportunity.
+    Strategic insights for the Decision Engine.
+    Identifies the single biggest Risk and Opportunity dynamically.
     """
-    # 1. RISK: Overdue debts or critical stock
+    # 1. RISK: Overdue debts
     overdue_debt = ClientBalance.objects.aggregate(s=Sum('overdue_debt'))['s'] or 0
     risk = {
         'title': 'Eng katta xavf',
         'type': 'RISK',
         'content': 'Qarzdorlik oshmoqda',
         'value': f"{int(overdue_debt):,} UZS",
-        'description': 'Debitorlik qarzining 40% dan ortig\'i muddati o\'tgan.',
+        'description': 'Debitorlik qarzining muddati o\'tgan qismi oshib bormoqda. Tezroq undirish zarur.',
         'action_label': 'Tahlil qilish',
         'tab_id': 'debtors'
     }
 
-    # 2. OPPORTUNITY: High margin products
+    # 2. OPPORTUNITY: High margin/selling products
+    thirty_days_ago = timezone.now() - timedelta(days=30)
+    top_sale = SaleItem.objects.filter(invoice__date__gte=thirty_days_ago).values('product__name').annotate(
+        total_profit=Sum('profit')
+    ).order_by('-total_profit').first()
+
+    if top_sale and top_sale['total_profit'] > 0:
+        opp_name = top_sale['product__name']
+        opp_val = top_sale['total_profit']
+        content = f"{opp_name}"
+        value = f"{int(opp_val):,} UZS foyda"
+        desc = "Ushbu mahsulot oxirgi 30 kunda eng ko'p foyda keltirgan. Zaxirasini yetarli saqlash tavsiya qilinadi."
+    else:
+        content = "Sotuv ma'lumotlari kam"
+        value = "Tahlil qilinmoqda"
+        desc = "Kutib turing. Yetarli ma'lumot yig'ilmagan."
+
     opportunity = {
         'title': 'Eng katta imkoniyat',
         'type': 'OPPORTUNITY',
-        'content': 'X-Blok (25% margin)',
-        'value': '+12% talab',
-        'description': 'Ushbu mahsulotga talab oshmoqda. Ishlab chiqarishni ko\'paytirish tavsiya etiladi.',
+        'content': content,
+        'value': value,
+        'description': desc,
         'action_label': 'Rejalashtirish',
         'tab_id': 'production'
     }

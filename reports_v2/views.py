@@ -101,10 +101,29 @@ class GeneralAnalyticsView(APIView):
                     'value': float(day_sales)
                 })
 
+        # 3. Waste Distribution (Phase 10: Real-time Analytics)
+        waste_data = WasteProcessing.objects.filter(date__date__gte=start_date).values('source_department').annotate(
+            total=Sum('waste_amount_kg')
+        )
+        dist = []
+        if total_waste > 0:
+            for item in waste_data:
+                dist.append({
+                    'name': item['source_department'] or 'Boshqa',
+                    'value': round((item['total'] / total_waste) * 100, 1)
+                })
+        else:
+            dist = [
+                {'name': 'CNC', 'value': 0},
+                {'name': 'Ishlab chiqarish', 'value': 0},
+                {'name': 'Pardozlash', 'value': 0},
+            ]
+
         # Enterprise Phase 7: Heuristics
-        from .heuristics import get_supply_chain_heuristics, get_cash_gap_prediction
+        from .heuristics import get_supply_chain_heuristics, get_cash_gap_prediction, get_top_business_metrics
         supply_alerts = get_supply_chain_heuristics()
         cash_prediction = get_cash_gap_prediction()
+        top_metrics = get_top_business_metrics()
 
         return Response({
             'kpis': {
@@ -119,15 +138,12 @@ class GeneralAnalyticsView(APIView):
             },
             'charts': {
                 'sales_trend': sales_trend,
-                'waste_distribution': [
-                    {'name': 'CNC', 'value': 65},
-                    {'name': 'Ishlab chiqarish', 'value': 25},
-                    {'name': 'Pardozlash', 'value': 10},
-                ]
+                'waste_distribution': dist
             },
             'heuristics': {
                 'supply_alerts': supply_alerts,
-                'cash_prediction': cash_prediction
+                'cash_prediction': cash_prediction,
+                'strategic_metrics': top_metrics
             }
         })
 

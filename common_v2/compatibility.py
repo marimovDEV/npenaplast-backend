@@ -119,11 +119,14 @@ class DashboardCompatibilityView(APIView):
             day_invoice_ids = visible_invoices.filter(date__date=day).values('id')
             s_qty = SaleItem.objects.filter(invoice_id__in=day_invoice_ids).aggregate(total=Sum('quantity'))['total'] or 0
             
+            from finishing_v2.models import FinishingJob
+            dekor_qty = FinishingJob.objects.filter(created_at__date=day).count()
+            
             chart_data.append({
                 'name': day_name,
                 'prod': p_qty,
                 'sales': s_qty,
-                'dekor': 0
+                'dekor': dekor_qty
             })
 
         # 5. Strategic Data for Decision Engine (Phase 10)
