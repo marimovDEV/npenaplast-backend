@@ -72,6 +72,7 @@ class Stock(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='stocks')
     material = models.ForeignKey(Material, on_delete=models.CASCADE)
     quantity = models.FloatField(default=0)
+    min_level = models.FloatField(default=0, help_text="Ogohlantirish darajasi")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
