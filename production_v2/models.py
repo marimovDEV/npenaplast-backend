@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from common_v2.mixins import StateMachineMixin
 
 class Recipe(models.Model):
     product = models.ForeignKey('warehouse_v2.Material', on_delete=models.CASCADE, related_name='recipes', null=True)
@@ -20,12 +21,19 @@ class RecipeItem(models.Model):
     def __str__(self):
         return f"{self.recipe.name}: {self.material.name} x {self.quantity}"
 
-class ProductionBatch(models.Model):
+class ProductionBatch(StateMachineMixin, models.Model):
     batch_number = models.CharField(max_length=100, unique=True)
-    status = models.CharField(max_length=20, choices=(
+    status = models.CharField(max_length=50, choices=(
         ('OPEN', 'Ochiq (Hisoblanmoqda)'),
         ('CLOSED', 'Yopilgan (Final)'),
+        ('CANCELLED', 'Bekor qilingan'),
     ), default='OPEN')
+    
+    STATUS_TRANSITIONS = {
+        'OPEN': ['CLOSED', 'CANCELLED'],
+        'CLOSED': [],
+        'CANCELLED': ['OPEN'],
+    }
     
     start_time = models.DateTimeField(auto_now_add=True)
     end_time = models.DateTimeField(null=True, blank=True)
@@ -50,18 +58,27 @@ class ProductionBatch(models.Model):
     def __str__(self):
         return f"Batch {self.batch_number} ({self.status}) - Unit Cost: {self.unit_cost}"
 
-class Zames(models.Model):
+class Zames(StateMachineMixin, models.Model):
     STATUS_CHOICES = (
         ('PENDING', 'Kutilmoqda'),
         ('IN_PROGRESS', 'Jarayonda'),
         ('DONE', 'Tugallandi'),
         ('CANCELLED', 'Bekor qilindi'),
+        ('FAILED', 'Xatolik / To‘xtagan'),
     )
+
+    STATUS_TRANSITIONS = {
+        'PENDING': ['IN_PROGRESS', 'CANCELLED'],
+        'IN_PROGRESS': ['DONE', 'FAILED', 'CANCELLED'],
+        'DONE': [],
+        'FAILED': ['IN_PROGRESS', 'CANCELLED'],
+        'CANCELLED': ['PENDING'],
+    }
 
     production_batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='zames_list', null=True, blank=True)
     zames_number = models.CharField(max_length=50, unique=True)
     recipe = models.ForeignKey(Recipe, on_delete=models.SET_NULL, null=True, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='PENDING')
     
     start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
@@ -129,18 +146,19 @@ class BlockProduction(models.Model):
     height = models.FloatField(default=500, help_text="mm")
     density = models.FloatField(default=20, help_text="kg/m3")
     
-    volume = models.FloatField(default=0, help_text="Total volume in m3")
-    weight_per_block = models.FloatField(default=0, help_text="kg")
+    volume = models.DecimalField(max_digits=18, decimal_places=4, default=0, help_text="Total volume in m3")
+    weight_per_block = models.DecimalField(max_digits=18, decimal_places=3, default=0, help_text="kg")
     
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRYING')
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='DRYING')
     warehouse = models.ForeignKey('warehouse_v2.Warehouse', on_delete=models.SET_NULL, null=True, blank=True)
     
     date = models.DateField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
+        from decimal import Decimal
         # Auto-calculate volume if not set: (L * W * H / 10^9) * count
         if not self.volume:
-            self.volume = (self.length * self.width * self.height / 1e9) * self.block_count
+            self.volume = (Decimal(str(self.length)) * Decimal(str(self.width)) * Decimal(str(self.height)) / Decimal('1e9')) * Decimal(str(self.block_count))
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -153,7 +171,7 @@ class DryingProcess(models.Model):
 
     def __str__(self):
         return f"Drying for {self.block_production}"
-class ProductionOrder(models.Model):
+class ProductionOrder(StateMachineMixin, models.Model):
     STATUS_CHOICES = (
         ('PENDING', 'Kutilmoqda'),
         ('PLANNED', 'Rejalashtirilgan'),
@@ -163,14 +181,27 @@ class ProductionOrder(models.Model):
         ('DELAYED', 'Kechikayotgan'),
         ('COMPLETED', 'Tugallangan'),
         ('CANCELLED', 'Bekor qilingan'),
+        ('FAILED', 'Xatolik / To‘xtagan'),
     )
+
+    STATUS_TRANSITIONS = {
+        'PENDING': ['PLANNED', 'IN_PROGRESS', 'CANCELLED'],
+        'PLANNED': ['IN_PROGRESS', 'CANCELLED'],
+        'IN_PROGRESS': ['QC_PENDING', 'COMPLETED', 'DELAYED', 'FAILED', 'CANCELLED'],
+        'QC_PENDING': ['COMPLETED', 'REPAIR', 'FAILED'],
+        'REPAIR': ['IN_PROGRESS', 'QC_PENDING', 'FAILED'],
+        'DELAYED': ['IN_PROGRESS', 'COMPLETED', 'CANCELLED'],
+        'COMPLETED': [],
+        'CANCELLED': ['PENDING'],
+        'FAILED': ['IN_PROGRESS', 'REPAIR', 'CANCELLED'],
+    }
 
     order_number = models.CharField(max_length=50, unique=True)
     product = models.ForeignKey('warehouse_v2.Material', on_delete=models.SET_NULL, null=True)
     quantity = models.IntegerField(help_text="Volume in blocks or cubic meters")
     
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
-    progress = models.FloatField(default=0, help_text="Total completion percentage")
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='PENDING')
+    progress = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="Total completion percentage")
     priority = models.CharField(max_length=20, choices=(
         ('URGENT', 'Shoshilinch'),
         ('HIGH', 'Yuqori'),
@@ -191,7 +222,7 @@ class ProductionOrder(models.Model):
     def __str__(self):
         return f"Order {self.order_number} ({self.status})"
 
-class ProductionOrderStage(models.Model):
+class ProductionOrderStage(StateMachineMixin, models.Model):
     STAGE_TYPES = (
         ('ZAMES', 'Zames (Mixing)'),
         ('DRYING', 'Quritish'),
@@ -210,9 +241,17 @@ class ProductionOrderStage(models.Model):
         ('FAILED', 'Xatolik / To‘xtagan'),
     )
 
+    STATUS_TRANSITIONS = {
+        'PENDING': ['ACTIVE', 'FAILED'],
+        'ACTIVE': ['DONE', 'PAUSED', 'FAILED'],
+        'PAUSED': ['ACTIVE', 'FAILED'],
+        'DONE': [],
+        'FAILED': ['PENDING', 'ACTIVE'],
+    }
+
     order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='stages')
-    stage_type = models.CharField(max_length=20, choices=STAGE_TYPES)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    stage_type = models.CharField(max_length=50, choices=STAGE_TYPES)
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='PENDING')
     
     sequence = models.IntegerField(default=0, help_text="Order of this stage in the pipeline")
     

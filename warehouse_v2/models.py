@@ -42,12 +42,12 @@ class RawMaterialBatch(models.Model):
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name='batches', null=True, blank=True)
     date = models.DateField(auto_now_add=True)
     expiry_date = models.DateField(null=True, blank=True)
-    quantity_kg = models.FloatField()
-    remaining_quantity = models.FloatField(default=0)
-    reserved_quantity = models.FloatField(default=0)
+    quantity_kg = models.DecimalField(max_digits=18, decimal_places=3)
+    remaining_quantity = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+    reserved_quantity = models.DecimalField(max_digits=18, decimal_places=3, default=0)
     batch_number = models.CharField(max_length=100, unique=True)
-    price_per_unit = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    currency = models.CharField(max_length=10, default='UZS')
+    price_per_unit = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    currency = models.CharField(max_length=20, default='UZS')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='IN_STOCK')
     qr_code = models.UUIDField(default=uuid.uuid4, editable=False)
     responsible_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
@@ -71,8 +71,8 @@ class Warehouse(models.Model):
 class Stock(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='stocks')
     material = models.ForeignKey(Material, on_delete=models.CASCADE)
-    quantity = models.FloatField(default=0)
-    min_level = models.FloatField(default=0, help_text="Ogohlantirish darajasi")
+    quantity = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+    min_level = models.DecimalField(max_digits=18, decimal_places=3, default=0, help_text="Ogohlantirish darajasi")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -90,7 +90,7 @@ class WarehouseTransfer(models.Model):
     from_warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='outgoing_transfers')
     to_warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='incoming_transfers')
     material = models.ForeignKey(Material, on_delete=models.CASCADE)
-    quantity = models.FloatField()
+    quantity = models.DecimalField(max_digits=18, decimal_places=3)
     date = models.DateTimeField(auto_now_add=True)
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='COMPLETED')
@@ -102,7 +102,7 @@ class WarehouseTransfer(models.Model):
 class BatchReservation(models.Model):
     document = models.ForeignKey('documents.Document', on_delete=models.CASCADE, related_name='reservations')
     batch = models.ForeignKey(RawMaterialBatch, on_delete=models.CASCADE, related_name='reservations')
-    quantity = models.FloatField()
+    quantity = models.DecimalField(max_digits=18, decimal_places=3)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -137,8 +137,8 @@ class InventoryAudit(models.Model):
 class InventoryAuditLine(models.Model):
     audit = models.ForeignKey(InventoryAudit, on_delete=models.CASCADE, related_name='lines')
     material = models.ForeignKey(Material, on_delete=models.CASCADE)
-    system_qty = models.FloatField(help_text="Tizimdagi qoldiq")
-    actual_qty = models.FloatField(help_text="Haqiqiy sanalgan qoldiq", null=True, blank=True)
+    system_qty = models.DecimalField(max_digits=18, decimal_places=3, help_text="Tizimdagi qoldiq")
+    actual_qty = models.DecimalField(max_digits=18, decimal_places=3, help_text="Haqiqiy sanalgan qoldiq", null=True, blank=True)
     
     @property
     def variance(self):

@@ -1,5 +1,7 @@
 from rest_framework import serializers
+from django.db import transaction
 from .models import Supplier, Material, RawMaterialBatch, Warehouse, Stock, WarehouseTransfer
+from inventory.services import update_inventory
 
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
@@ -22,6 +24,22 @@ class RawMaterialBatchSerializer(serializers.ModelSerializer):
         model = RawMaterialBatch
         fields = '__all__'
 
+    def create(self, validated_data):
+        with transaction.atomic():
+            instance = super().create(validated_data)
+            # Enterprise Update: Centralized Stock Update via Service
+            # Default warehouse for raw materials is Sklad 1
+            warehouse, _ = Warehouse.objects.get_or_create(name='Sklad 1 (Xom Ashyo)')
+            update_inventory(
+                product=instance.material,
+                warehouse=warehouse,
+                qty=instance.quantity_kg,
+                batch_number=instance.batch_number,
+                user=instance.responsible_user,
+                reference=f"RECEIPT-{instance.invoice_number}"
+            )
+            return instance
+
 class WarehouseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Warehouse
@@ -43,13 +61,11 @@ class StockSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def get_reserved_quantity(self, obj):
-        # Heuristic: Sum reserved quantities from batches of this material
-        # Note: In multi-warehouse, we'd filter by batch location, but here we assume Sklad 1
-        from .models import RawMaterialBatch
+        from django.db.models import Sum
         return RawMaterialBatch.objects.filter(
             material=obj.material, 
             status__in=['IN_STOCK', 'RESERVED']
-        ).aggregate(s=serializers.models.Sum('reserved_quantity'))['s'] or 0
+        ).aggregate(s=Sum('reserved_quantity'))['s'] or 0
 
     def get_available_quantity(self, obj):
         reserved = self.get_reserved_quantity(obj)
@@ -73,3 +89,25 @@ class WarehouseTransferSerializer(serializers.ModelSerializer):
     class Meta:
         model = WarehouseTransfer
         fields = '__all__'
+
+    def create(self, validated_data):
+        with transaction.atomic():
+            instance = super().create(validated_data)
+            # Enterprise Update: Atomic Transfer via Service Layer
+            # 1. Decrease from source
+            update_inventory(
+                product=instance.material,
+                warehouse=instance.from_warehouse,
+                qty=-instance.quantity,
+                user=instance.approved_by,
+                reference=f"TRANSFER-OUT-{instance.id}"
+            )
+            # 2. Increase in destination
+            update_inventory(
+                product=instance.material,
+                warehouse=instance.to_warehouse,
+                qty=instance.quantity,
+                user=instance.approved_by,
+                reference=f"TRANSFER-IN-{instance.id}"
+            )
+            return instance

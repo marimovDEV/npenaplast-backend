@@ -74,7 +74,13 @@ class WarehouseViewSet(viewsets.ModelViewSet):
 
 class StockViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = StockSerializer
-    filterset_fields = ['warehouse', 'material']
+    filterset_fields = {
+        'warehouse': ['exact'],
+        'warehouse_id': ['exact'],
+        'material': ['exact'],
+        'material_id': ['exact'],
+        'material__name': ['icontains', 'exact'],
+    }
 
     def get_permissions(self):
         # All authenticated users can view stock levels
@@ -83,8 +89,8 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if get_user_role_name(user) in ['Bosh Admin', 'Admin', 'SUPERADMIN', 'ADMIN'] or user.is_superuser:
-            return Stock.objects.all()
-        return Stock.objects.filter(warehouse__in=user.assigned_warehouses.all())
+            return Stock.objects.all().select_related('warehouse', 'material')
+        return Stock.objects.filter(warehouse__in=user.assigned_warehouses.all()).select_related('warehouse', 'material')
 
 class WarehouseTransferViewSet(viewsets.ModelViewSet):
     serializer_class = WarehouseTransferSerializer
