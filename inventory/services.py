@@ -20,10 +20,13 @@ def update_inventory(product, warehouse, qty, batch_number=None, source=ProductS
             }
         )
         
-        if batch.current_weight + qty < 0:
+        from decimal import Decimal
+        qty_dec = Decimal(str(qty))
+        
+        if batch.current_weight + qty_dec < 0:
             raise ValidationError(f"Yetersiz qoldiq: {product.name} (Partiya: {batch_number}). Mavjud: {batch.current_weight}, Talab: {abs(qty)}")
         
-        batch.current_weight += qty
+        batch.current_weight += qty_dec
         if batch.current_weight == 0:
             batch.status = 'DEPLETED'
         else:

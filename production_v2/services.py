@@ -211,6 +211,7 @@ def finish_zames(zames, output_weight, user=None):
         raise ValidationError(f"Zamesni yakunlab bo'lmaydi. Jarayonda emas.")
     
     from accounting.services import create_journal_entry
+    from .models import ProductionOrderStage
     
     with transaction.atomic():
         total_mix_cost = Decimal('0')
@@ -224,8 +225,13 @@ def finish_zames(zames, output_weight, user=None):
         for item in zames.items.all():
             # Get cost at this moment
             price_per_unit = Decimal('0')
-            if item.batch and item.batch.price_per_unit:
-                price_per_unit = item.batch.price_per_unit
+            if item.batch:
+                price_per_unit = item.batch.price_per_unit or item.material.price
+                # Deduct from specific batch remaining quantity
+                item.batch.remaining_quantity = max(0, item.batch.remaining_quantity - item.quantity)
+                if item.batch.remaining_quantity <= 0:
+                    item.batch.status = 'DEPLETED'
+                item.batch.save(update_fields=['remaining_quantity', 'status'])
             else:
                 price_per_unit = item.material.price
             
@@ -235,7 +241,7 @@ def finish_zames(zames, output_weight, user=None):
             
             total_mix_cost += item.total_cost
 
-            # Stock Deduction
+            # Stock Deduction (General Stock Table)
             create_transaction(
                 product=item.material,
                 from_wh=sklad1,
@@ -263,12 +269,17 @@ def finish_zames(zames, output_weight, user=None):
         # 3. Create Expanded Material Batch (Sklad 2)
         sklad2 = Warehouse.objects.filter(name__icontains='Sklad №2').first()
         expanded_material = Material.objects.filter(name__icontains='Granula EPS').first() 
+        if not expanded_material:
+            # Fallback if specific name doesn't match
+            expanded_material = Material.objects.filter(category='SEMI').first()
+
         batch_no = f"EXP-{zames.zames_number}"
         
         RawMaterialBatch.objects.create(
             invoice_number=f"PROD-{zames.zames_number}",
             material=expanded_material,
             quantity_kg=output_weight,
+            remaining_quantity=output_weight,
             batch_number=batch_no,
             status='IN_STOCK',
             price_per_unit = total_mix_cost / Decimal(str(output_weight)) if output_weight > 0 else 0,
@@ -304,6 +315,18 @@ def finish_zames(zames, output_weight, user=None):
                 auto_post=True
             )
 
+        # 5. Pipeline Integration: If this Zames belongs to a Production Order, transition it.
+        # Find the stage that was waiting for this Zames
+        linked_stage = ProductionOrderStage.objects.filter(
+            related_id=zames.id, 
+            stage_type='ZAMES', 
+            status='ACTIVE'
+        ).first()
+        
+        if linked_stage:
+            # Transition to next stage (usually DRYING or BUNKER)
+            transition_to_next_stage(linked_stage.id, user=user)
+
         log_action(
             user=user or zames.operator,
             action='UPDATE',
@@ -311,6 +334,7 @@ def finish_zames(zames, output_weight, user=None):
             description=f"Zames yakunlandi: {zames.zames_number}. Umumiy tannarx: {total_mix_cost} UZS",
             object_id=zames.id
         )
+        return zames
         
 def assign_task_to_operator(stage_id, operator_id, user=None):
     """

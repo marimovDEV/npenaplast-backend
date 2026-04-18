@@ -31,21 +31,54 @@ class ZamesSerializer(serializers.ModelSerializer):
     items = ZamesItemSerializer(many=True, required=False)
     recipe_name = serializers.ReadOnlyField(source='recipe.name')
     operator_name = serializers.ReadOnlyField(source='operator.username')
+    stage_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     
     class Meta:
         model = Zames
         fields = [
             'id', 'zames_number', 'recipe', 'recipe_name', 'status', 
             'start_time', 'end_time', 'input_weight', 'output_weight', 
-            'operator', 'operator_name', 'machine_id', 'created_at', 'items'
+            'operator', 'operator_name', 'machine_id', 'created_at', 'items',
+            'stage_id', 'production_batch'
         ]
         read_only_fields = ('created_at',)
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
+        stage_id = validated_data.pop('stage_id', None)
+        
+        # Link to production batch if stage_id is provided
+        if stage_id:
+            try:
+                stage = ProductionOrderStage.objects.get(id=stage_id)
+                order = stage.order
+                from .models import ProductionBatch
+                batch, _ = ProductionBatch.objects.get_or_create(
+                    batch_number=order.order_number,
+                    defaults={'status': 'OPEN'}
+                )
+                validated_data['production_batch'] = batch
+            except ProductionOrderStage.DoesNotExist:
+                pass
+
         zames = Zames.objects.create(**validated_data)
+        
+        # Link the stage to this zames
+        if stage_id:
+            try:
+                stage = ProductionOrderStage.objects.get(id=stage_id)
+                stage.related_id = zames.id
+                stage.status = 'ACTIVE'
+                if not stage.started_at:
+                    from django.utils import timezone
+                    stage.started_at = timezone.now()
+                stage.save()
+            except ProductionOrderStage.DoesNotExist:
+                pass
+
         for item_data in items_data:
             ZamesItem.objects.create(zames=zames, **item_data)
+            
         return zames
 
 class BunkerSerializer(serializers.ModelSerializer):
