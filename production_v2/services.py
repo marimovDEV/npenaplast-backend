@@ -356,4 +356,153 @@ def create_production_order(product, quantity, order_number=None, deadline=None,
         order.transition_to('IN_PROGRESS', user=user)
         return order
 
-# Rest of the functions follow similar patterns...
+def assign_task_to_operator(stage_id, operator_id, user=None):
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    
+    with transaction.atomic():
+        stage = ProductionOrderStage.objects.select_for_update().get(id=stage_id)
+        operator = User.objects.get(id=operator_id)
+        
+        stage.current_operator = operator
+        stage.save()
+        
+        log_action(
+            user=user,
+            action='UPDATE',
+            module='Production',
+            description=f"Topshiriq biriktirildi: {stage.get_stage_type_display()} -> {operator.username}",
+            object_id=stage.id
+        )
+        return stage
+
+def fail_production_stage(stage_id, reason, user=None):
+    with transaction.atomic():
+        stage = ProductionOrderStage.objects.select_for_update().get(id=stage_id)
+        stage.transition_to('FAILED', user=user)
+        
+        StageActionLog.objects.create(
+            order=stage.order,
+            stage=stage,
+            stage_type=stage.stage_type,
+            action='FAIL',
+            user=user,
+            notes=reason
+        )
+        return stage
+
+def force_release_bunker(bunker_id, user=None):
+    with transaction.atomic():
+        bunker = Bunker.objects.select_for_update().get(id=bunker_id)
+        bunker.is_occupied = False
+        bunker.save()
+        
+        log_action(
+            user=user,
+            action='UPDATE',
+            module='Production',
+            description=f"Bunker majburiy bo'shatildi: {bunker.name}",
+            object_id=bunker.id
+        )
+        return bunker
+
+def force_complete_stage(stage_id, user=None, reason=None):
+    with transaction.atomic():
+        stage = ProductionOrderStage.objects.select_for_update().get(id=stage_id)
+        stage.transition_to('DONE', user=user)
+        
+        log_action(
+            user=user,
+            action='UPDATE',
+            module='Production',
+            description=f"Bosqich majburiy yakunlandi: {stage.get_stage_type_display()} - {reason}",
+            object_id=stage.id
+        )
+        return stage.order
+
+def reset_stage_to_pending(stage_id, user=None, reason=None):
+    with transaction.atomic():
+        stage = ProductionOrderStage.objects.select_for_update().get(id=stage_id)
+        stage.transition_to('PENDING', user=user)
+        
+        log_action(
+            user=user,
+            action='UPDATE',
+            module='Production',
+            description=f"Bosqich qayta tiklandi: {stage.get_stage_type_display()} - {reason}",
+            object_id=stage.id
+        )
+        return stage
+
+def calculate_plan_material_needs(plan_id):
+    plan = ProductionPlan.objects.get(id=plan_id)
+    needs = {}
+    
+    for order in plan.orders.all():
+        if order.product and hasattr(order.product, 'recipes'):
+            recipe = order.product.recipes.filter(is_active=True).first()
+            if recipe:
+                for item in recipe.items.all():
+                    mat_id = item.material.id
+                    if mat_id not in needs:
+                        needs[mat_id] = {
+                            'name': item.material.name,
+                            'unit': item.material.unit,
+                            'total_qty': 0
+                        }
+                    needs[mat_id]['total_qty'] += item.quantity * order.quantity
+    
+    return list(needs.values())
+
+def start_plan(plan_id, user=None):
+    with transaction.atomic():
+        plan = ProductionPlan.objects.select_for_update().get(id=plan_id)
+        plan.status = 'ACTIVE'
+        plan.start_time = timezone.now()
+        plan.save()
+        
+        log_action(
+            user=user,
+            action='UPDATE',
+            module='Production',
+            description=f"Plan boshlandi: {plan}",
+            object_id=plan.id
+        )
+        return plan
+
+def complete_plan(plan_id, actual_volume, user=None):
+    with transaction.atomic():
+        plan = ProductionPlan.objects.select_for_update().get(id=plan_id)
+        plan.status = 'COMPLETED'
+        plan.end_time = timezone.now()
+        plan.actual_volume = actual_volume
+        plan.save()
+        
+        log_action(
+            user=user,
+            action='UPDATE',
+            module='Production',
+            description=f"Plan yakunlandi: {plan} - Hajm: {actual_volume}",
+            object_id=plan.id
+        )
+        return plan
+
+def perform_quality_check(order_id, status, notes='', waste_weight=0, inspector=None):
+    with transaction.atomic():
+        order = ProductionOrder.objects.select_for_update().get(id=order_id)
+        
+        qc = QualityCheck.objects.create(
+            order=order,
+            status=status,
+            notes=notes,
+            waste_weight=waste_weight,
+            inspector=inspector
+        )
+        
+        if status == 'PASSED':
+            # Optionally transition order if custom flow requires
+            pass
+        elif status == 'FAILED':
+            order.transition_to('FAILED', user=inspector)
+            
+        return qc
