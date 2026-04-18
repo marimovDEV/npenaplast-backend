@@ -20,7 +20,7 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 
 def seed_data():
-    print("🚀 Penoplast ERP Enterprise Seeding Boshlanmoqda...")
+    print("🚀 Yuksar ERP Enterprise Seeding Boshlanmoqda...")
     
     # 1. Users
     admin, _ = User.objects.get_or_create(username='admin', defaults={'is_superuser': True, 'is_staff': True})

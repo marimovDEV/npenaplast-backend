@@ -13,7 +13,7 @@ from production_v2.models import Zames, BlockProduction, DryingProcess
 from sales_v2.models import Customer
 
 def run():
-    print("Setting up Penoplast ERP v2...")
+    print("Setting up Yuksar ERP v2...")
     
     # 1. Warehouses
     sklad1, _ = Warehouse.objects.get_or_create(name='Sklad 1 (Xom Ashyo)')

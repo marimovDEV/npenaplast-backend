@@ -46,7 +46,7 @@ def generate_enterprise_xlsx(report_type, start_date=None, end_date=None):
     return wb
 
 def _fill_pl_report(ws, start_date, end_date, h_font, h_fill, border):
-    ws.append(["Penoplast ERP+ - Foyda va Zarar Hisoboti (P&L)"])
+    ws.append(["Yuksar ERP+ - Foyda va Zarar Hisoboti (P&L)"])
     ws.merge_cells('A1:E1')
     ws['A1'].font = Font(bold=True, size=16)
     ws.append([f"Davr: {start_date or 'Barcha'} - {end_date or 'Bugun'}"])

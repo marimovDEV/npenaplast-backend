@@ -12,7 +12,7 @@ def run_command(cmd):
     return True
 
 def migrate():
-    print("🚀 Penoplast ERP SQLite -> PostgreSQL Migration Started")
+    print("🚀 Yuksar ERP SQLite -> PostgreSQL Migration Started")
     
     # 1. Dump data from SQLite
     # We exclude contenttypes and permissions to avoid integrity errors on the new DB

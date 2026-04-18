@@ -240,7 +240,7 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Penoplast ERP API',
+    'TITLE': 'Yuksar ERP API',
     'DESCRIPTION': 'Professional ERP Management API with Inventory and QR Tracking',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
