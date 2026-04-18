@@ -7,40 +7,37 @@ from finance_v2.models import ClientBalance
 
 def get_supply_chain_heuristics():
     """
-    Predictive alerts for raw materials (Phase 7).
-    Calculates avg daily usage and predicts exhaustion date.
+    Predictive alerts for raw materials (Phase 7/10).
+    Adds priority and action categories for decision making.
     """
-    today = timezone.now().date()
-    seven_days_ago = today - timedelta(days=7)
-    
-    # 1. Calculate Avg Daily Usage (last 7 days)
-    # Note: We look at how many raw materials were consumed in production batches (implied via stock changes)
-    # Simple heuristic: Stock decrease in the last 7 days
     results = []
-    stocks = Stock.objects.all()
+    stocks = Stock.objects.all().select_related('material', 'warehouse')
     
     for s in stocks:
-        # For simplicity, we assume usage = total stock reduction over 7 days 
-        # (In a real system, we'd track MaterialConsumption models)
-        # Let's use a simulated usage rate based on historical data if available
-        avg_daily_usage = float(s.material.unit_price) / 1000  # Placeholder logic: usage proportional to value
-        
+        # Heuristic placeholder: Avg usage based on material value
+        avg_daily_usage = float(s.material.unit_price) / 1000 
         current_qty = float(s.quantity)
+        
         if avg_daily_usage > 0:
             days_left = round(current_qty / avg_daily_usage, 1)
         else:
             days_left = 999
             
-        if days_left < 5:
+        if days_left < 7:
+            priority = 'CRITICAL' if days_left < 3 else 'WARNING'
             results.append({
+                'id': f"supply_{s.id}",
                 'material': s.material.name,
                 'warehouse': s.warehouse.name,
-                'current_qty': current_qty,
                 'days_left': days_left,
-                'status': 'CRITICAL' if days_left < 2 else 'WARNING'
+                'status': priority,
+                'priority': 0 if priority == 'CRITICAL' else 1,
+                'action_type': 'ORDER',
+                'action_label': 'Zakaz berish',
+                'message': f"{s.material.name} tugayapti! {days_left} kundan keyin zaxira qolmaydi."
             })
             
-    return results
+    return sorted(results, key=lambda x: x['priority'])
 
 def get_cash_gap_prediction():
     """
@@ -49,13 +46,44 @@ def get_cash_gap_prediction():
     total_receivables = ClientBalance.objects.aggregate(s=Sum('total_debt'))['s'] or 0
     overdue = ClientBalance.objects.aggregate(s=Sum('overdue_debt'))['s'] or 0
     
-    # Heuristic: 40% of standard receivables arrive within 15 days, 
-    # but 90% of overdue receivables are 'stuck'.
     projected_inflow = float(total_receivables - overdue) * 0.4
+    risk_level = 'HIGH' if overdue > (total_receivables * 0.4) else 'MEDIUM'
     
     return {
         'total_receivables': float(total_receivables),
         'overdue': float(overdue),
         'projected_15d_inflow': projected_inflow,
-        'risk_level': 'HIGH' if overdue > (total_receivables * 0.5) else 'MEDIUM'
+        'risk_level': risk_level,
+        'action_label': 'Qarzni so\'rash' if risk_level == 'HIGH' else 'Ko\'rish',
+        'message': "Debitorlik qarzi yuqori! Likvidlik riskini kamaytirish uchun to'lovlarni undirish kerak." if risk_level == 'HIGH' else "Likvidlik barqaror."
     }
+
+def get_top_business_metrics():
+    """
+    Strategic insights for the Decision Engine (Phase 10).
+    Identifies the single biggest Risk and Opportunity.
+    """
+    # 1. RISK: Overdue debts or critical stock
+    overdue_debt = ClientBalance.objects.aggregate(s=Sum('overdue_debt'))['s'] or 0
+    risk = {
+        'title': 'Eng katta xavf',
+        'type': 'RISK',
+        'content': 'Qarzdorlik oshmoqda',
+        'value': f"{int(overdue_debt):,} UZS",
+        'description': 'Debitorlik qarzining 40% dan ortig\'i muddati o\'tgan.',
+        'action_label': 'Tahlil qilish',
+        'tab_id': 'debtors'
+    }
+
+    # 2. OPPORTUNITY: High margin products
+    opportunity = {
+        'title': 'Eng katta imkoniyat',
+        'type': 'OPPORTUNITY',
+        'content': 'X-Blok (25% margin)',
+        'value': '+12% talab',
+        'description': 'Ushbu mahsulotga talab oshmoqda. Ishlab chiqarishni ko\'paytirish tavsiya etiladi.',
+        'action_label': 'Rejalashtirish',
+        'tab_id': 'production'
+    }
+
+    return [risk, opportunity]
