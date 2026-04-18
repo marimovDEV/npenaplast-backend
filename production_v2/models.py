@@ -83,6 +83,10 @@ class ZamesItem(models.Model):
     material = models.ForeignKey('warehouse_v2.Material', on_delete=models.CASCADE)
     batch = models.ForeignKey('warehouse_v2.RawMaterialBatch', on_delete=models.SET_NULL, null=True, blank=True)
     quantity = models.FloatField()
+    
+    # Financials (Phase 12)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     def __str__(self):
         return f"{self.zames}: {self.material.name} ({self.quantity})"

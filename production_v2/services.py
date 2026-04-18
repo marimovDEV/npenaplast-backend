@@ -173,10 +173,22 @@ def finish_drying_process(block_production_id, user=None):
 def start_zames(zames, user=None):
     """
     Transitions a Zames to IN_PROGRESS.
+    Checks stock availability in Sklad 1 before starting.
     """
     if zames.status != 'PENDING':
         raise ValidationError(f"Zamesni boshlab bo'lmaydi. Joriy status: {zames.status}")
     
+    # Validation: Check Sklad 1 stock
+    sklad1 = Warehouse.objects.filter(name__icontains='Sklad №1').first()
+    if not sklad1:
+        sklad1 = Warehouse.objects.first()
+
+    for item in zames.items.all():
+        from warehouse_v2.models import Stock
+        stock = Stock.objects.filter(warehouse=sklad1, material=item.material).first()
+        if not stock or stock.quantity < item.quantity:
+            raise ValidationError(f"Xom-ashyo yetarli emas: {item.material.name}. Omborda: {stock.quantity if stock else 0} {item.material.unit}")
+
     zames.status = 'IN_PROGRESS'
     zames.start_time = timezone.now()
     zames.save()
@@ -193,48 +205,64 @@ def start_zames(zames, user=None):
 def finish_zames(zames, output_weight, user=None):
     """
     Finalizes a Zames, deducts inventory from Sklad 1, 
-    and adds an expanded material batch to Sklad 2.
+    calculates real-time costs, and adds semi-finished product to Sklad 2.
     """
     if zames.status != 'IN_PROGRESS':
         raise ValidationError(f"Zamesni yakunlab bo'lmaydi. Jarayonda emas.")
     
+    from accounting.services import create_journal_entry
+    
     with transaction.atomic():
-        # 1. Update Zames details
-        zames.status = 'DONE'
-        zames.end_time = timezone.now()
-        zames.output_weight = output_weight
-        zames.save()
-        
-        # 2. Deduct Input Materials (Sklad 1)
-        # We assume Sklad 1 is the primary raw material warehouse (ID=1 or name based)
+        total_mix_cost = Decimal('0')
+        accounting_lines = []
+
+        # 1. Deduct Input Materials (Sklad 1) & Calculate Costs
         sklad1 = Warehouse.objects.filter(name__icontains='Sklad №1').first()
         if not sklad1:
-             sklad1 = Warehouse.objects.first() # Fallback
+             sklad1 = Warehouse.objects.first()
 
         for item in zames.items.all():
+            # Get cost at this moment
+            price_per_unit = Decimal('0')
+            if item.batch and item.batch.price_per_unit:
+                price_per_unit = item.batch.price_per_unit
+            else:
+                price_per_unit = item.material.price
+            
+            item.unit_cost = price_per_unit
+            item.total_cost = Decimal(str(item.quantity)) * price_per_unit
+            item.save()
+            
+            total_mix_cost += item.total_cost
+
+            # Stock Deduction
             create_transaction(
                 product=item.material,
                 from_wh=sklad1,
-                to_wh=None, # Consumed in production
+                to_wh=None, # Consumed
                 qty=item.quantity,
                 trans_type='PRODUCTION',
                 batch_number=item.batch.batch_number if item.batch else None
             )
-            
-            # If batch is specified, update its status if depleted (optional logic)
-            if item.batch:
-                # Check if depleted
-                # (This could be more complex, for now we just log it)
-                pass
 
+            # Accounting Credit Line (Account 1010 - Raw Materials)
+            accounting_lines.append({
+                'account_code': '1010',
+                'debit': 0,
+                'credit': item.total_cost,
+                'description': f"Xom-ashyo sarfi: {item.material.name} ({zames.zames_number})"
+            })
+
+        # 2. Update Zames details
+        zames.status = 'DONE'
+        zames.end_time = timezone.now()
+        zames.output_weight = output_weight
+        zames.input_weight = sum(item.quantity for item in zames.items.all())
+        zames.save()
+        
         # 3. Create Expanded Material Batch (Sklad 2)
-        # Sklad 2 handles semi-finished (expanded) EPS
         sklad2 = Warehouse.objects.filter(name__icontains='Sklad №2').first()
-        
-        # Find the "Expanded EPS" material
-        # In a real system, this would be defined in the Recipe output
-        expanded_material = Material.objects.filter(name__icontains='Granula EPS').first() # Or a specific "Expanded" material
-        
+        expanded_material = Material.objects.filter(name__icontains='Granula EPS').first() 
         batch_no = f"EXP-{zames.zames_number}"
         
         RawMaterialBatch.objects.create(
@@ -243,6 +271,7 @@ def finish_zames(zames, output_weight, user=None):
             quantity_kg=output_weight,
             batch_number=batch_no,
             status='IN_STOCK',
+            price_per_unit = total_mix_cost / Decimal(str(output_weight)) if output_weight > 0 else 0,
             responsible_user=user or zames.operator,
             date=timezone.now().date()
         )
@@ -256,24 +285,30 @@ def finish_zames(zames, output_weight, user=None):
             batch_number=batch_no
         )
 
-        # Finance: WIP (Expanded) Debit, Raw Materials Credit
-        # Total cost = sum of input material costs (needs historical price tracking)
-        # For now, we record the move.
-        record_double_entry(
-            description=f"Zames yakunlandi: {zames.zames_number}",
-            entries=[
-                {'account_code': '2020', 'debit': Decimal('0'), 'credit': Decimal('0')}, # Placeholder for cost
-                {'account_code': '2010', 'debit': Decimal('0'), 'credit': Decimal('0')}, # Placeholder for cost
-            ],
-            reference=f"ZAMES-{zames.zames_number}",
-            user=user or zames.operator
-        )
+        # 4. Accounting Entry: Debit WIP (Account 2010), Credit Materials (1010)
+        # Note: We already have credit lines, now add the total debit line
+        accounting_lines.append({
+          'account_code': '2010',
+          'debit': total_mix_cost,
+          'credit': 0,
+          'description': f"Ishlab chiqarish xarajatlari (Mixing): {zames.zames_number}"
+        })
+
+        if total_mix_cost > 0:
+            create_journal_entry(
+                description=f"Zames tannarxi qayd etildi: {zames.zames_number}",
+                lines=accounting_lines,
+                source_type='PRODUCTION',
+                source_id=zames.id,
+                user=user or zames.operator,
+                auto_post=True
+            )
 
         log_action(
             user=user or zames.operator,
             action='UPDATE',
             module='Production',
-            description=f"Zames yakunlandi: {zames.zames_number}. Chiqish: {output_weight}kg",
+            description=f"Zames yakunlandi: {zames.zames_number}. Umumiy tannarx: {total_mix_cost} UZS",
             object_id=zames.id
         )
         
